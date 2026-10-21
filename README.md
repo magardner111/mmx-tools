@@ -30,6 +30,17 @@ python3 ui.py some/other.sfc
 | **Code** | Any routine as Assembly, decompiled C, literal C, or Assembly + C side by side (click a line to find its counterpart) |
 
 Edits are made in memory; **Save** (⌘S on macOS, Ctrl+S elsewhere) writes the project ROM and fixes the checksum.
+**Test here** (right-click the stage map in **Levels**) builds `work/test.sfc` from the ROM as edited and runs it:
+it skips the logos, title and boss card and starts the stage with X at that spot (about 2 s after power-on).
+Pick "landing on the floor below" to let X beam down onto the first floor in that column. Command line:
+`python3 testwarp.py LEVEL [X [Y]] [--run]` (without X: the stage's normal start). X's beam ignores terrain for
+the checkpoint's `telDwn` frames, so the test ROM releases it higher, over open air, and he lands on the floor
+instead of sinking into it. Some bosses only appear after their approach (Storm Eagle comes after a platform
+ride); tests reach those from a save state instead (see NOTES.md).
+
+**Checking claims in the game**: `verify_chill_penguin.py` and `verify_storm_eagle.py` run the game headless in
+Mesen 2 (`mesen_verify.py`) and check every claim we make about that boss; results are in `VERIFIED.md`.
+
 **Text size** (toolbar, or Ctrl/⌘ `+` / `-`) scales all text, from 70% to 150%, and is remembered. Panels that
 don't fit the window scroll.
 **Expand ROM…** (toolbar) grows the project to 2.5 MB so stages can hold more events (2 KB each instead of the stock size).
@@ -73,6 +84,8 @@ python3 trace.py 81B516
 
 - `NOTES.md`: ROM format: addressing, level data, events, checkpoints, camera locks, collision, expansion, RAM map, MegaEdX bugs.
 - `ENEMY_AI.md`: how enemy code works (object fields, state machines, helpers), Batton Bone, and the full Chill Penguin breakdown.
+- `PLAYER.md`: X himself: object fields (hurt lock, flash timer...), steps, routines, the no-damage AR code.
+- `check_records.py`: checks that names and facts agree across lift.py, defs.py, the docs and the tests (see `.claude/skills/sync-records`).
 
 ## Safety
 

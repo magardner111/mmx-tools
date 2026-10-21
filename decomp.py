@@ -10,7 +10,7 @@ Builds on trace.py:
 
 Output is readable C that follows the original logic exactly; it is not compiled.
 
-usage: python3 decomp.py <snes_addr_hex | boss_key>
+usage: python3 decomp.py <snes_addr_hex | boss_key | x>
 """
 import re
 import sys
@@ -294,7 +294,8 @@ class Decompiler:
 
     # --- operands ------------------------------------------------------------------------
     def fld(self, n, obj="self"):
-        name = self.fields.get(n, f"f{n:02X}")
+        # per-boss names describe the boss's own slot; other objects (spawned shots etc.) get the generic ones
+        name = (self.fields if obj == "self" else FIELDS).get(n, f"f{n:02X}")
         return f"{obj}->{name}"
 
     def mem(self, arg, st):
@@ -863,10 +864,10 @@ def decompile(rom, entry, boss=None):
 
 
 if __name__ == "__main__":
-    from defs import BOSSES
+    from defs import BOSSES, PLAYER
     g = MMX1(ROM)
     arg = sys.argv[1]
-    boss = BOSSES.get(arg)
+    boss = PLAYER if arg == PLAYER.key else BOSSES.get(arg)
     entry = boss.routine if boss else int(arg, 16)
     if not boss:
         boss = next((b for b in BOSSES.values() if b.routine == entry), None)

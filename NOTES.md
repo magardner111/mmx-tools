@@ -169,7 +169,7 @@ Nailing these down needs the game's collision handler disassembled, or testing i
   - The border list is a word table at `$86E4E2 + level*2` (bank $86).
   - Each lock record is `right, left, bottom, top` (4 words), then 1-byte indices into `$86ECD0`, 0-terminated.
   - Each `$86ECD0` entry is 4 bytes: a RAM word address and a value, written while X is inside the box.
-  - The addresses are the camera border registers `$1E5E` left, `$1E60` right, `$1E68` top, `$1E6E` bottom.
+  - The addresses are the camera border registers `border_left` (`$1E5E`) left, `border_right` (`$1E60`) right, `border_top` (`$1E68`) top, `border_bottom` (`$1E6E`) bottom.
   - Lock entries are **shared between levels by index**, so editing an entry's value in place affects other levels too.
 - **Expanded (v4) format:** flattened into bank $BB. Each level gets 0x800 bytes and each lock 0x20: 4 border words, then up to 6 inline `(addr, value)` pairs, 0-terminated. A new 65816 routine at `$81F6C4` reads them.
 
@@ -206,10 +206,22 @@ In `mmx1.RAM`:
 - X position `$0BAD/$0BB0`
 - level `$1F7A`, checkpoint `$1F81`
 - object/tile/palette set `$1F08/09/0A`
-- boss-defeat flags for Chameleon `$1F87`, Mandrill `$1F8F`, Mammoth `$1F95`
+- boss-defeat flags for Chameleon `flag_sting_chameleon` (`$1F87`), Mandrill `flag_spark_mandrill` (`$1F8F`), Mammoth `flag_flame_mammoth` (`$1F95`)
 - decompressed layouts at `$7EE800` (FG) and `$7EEC00` (BG)
 - X's object is at `$0BA8`, so X's field `$33` = `$0BDB` is the selected weapon × 2; ammo/ownership at `$1F85 + weapon×2`
-- `$1F1D` = id of the last projectile that hit an enemy; `$1F1E` = that projectile's object address
+- `last_hit_projectile` (`$1F1D`) = id of the last projectile that hit an enemy; `last_hit_object` (`$1F1E`) = that projectile's object address
+- `$1F86 + 2×stage` (high byte of that stage's weapon word): bit 6 = the stage's boss is beaten. `boss_already_beaten` (`$84:AADD`) tests it
+  for stages < 9 and returns 1 (and increments `boss_cleared` (`$1F23`)) if set; bosses despawn on spawn when it does
+- `$0BAA` = X's step (field `$02`); `x_freeze_for_boss` (`$84:9FEB`) sets it to `$1E` (frozen) when a boss spawns
+- `screen_left` (`$1E4D`) = screen left edge used by boss positioning (Boomer Kuwanger appears at +$10, teleports to +$20 / +$E0)
+- Boss HP bar: `hud_boss` (`$1F0E`) = the object it shows (0 = no bar; a boss sets it to itself at the end of its intro),
+  `hud_boss_bar_state` (`$1F10`) = bar state for `hud_boss_bar` (`$80:DA0E`) (0 set up, 2 redraw whenever the object's hp has bit 7 set, 4 remove,
+  6 hide during pause, 8 idle). Never setting `hud_boss` (`$1F0E`) means no bar at all.
+- `boss_defeated` (`$1F0C`) = boss defeated: set at boss HP 0; enemies stop hurting X (`hurt_x_on_contact` (`$84:9B03`)) and X's own update reads it.
+  The boss-defeated sequence (`boss_defeated_sequence` (`$84:A677`)) freezes objects (`$1F13`–`$1F18`), fades the palette to white and
+  freezes X for the stage clear.
+- Explosions: `explode` (`$84:A4B5`) one explosion at the object + sound $23; `random_explosion` (`$84:A4D0`) random explosions around it
+  (offset `$0000`/`$0002`, random masks `$0004`/`$0006`, every frame where `frame & $0008 == 0`)
 
 ## Tooling here
 
@@ -228,3 +240,24 @@ In `mmx1.RAM`:
 - The BG layer (`--bg`) renders but hasn't been verified against the game.
 - No mapping yet from enemy id to name and sprite.
 - Growing maps, blocks or tiles still needs relocation work; expansion only covers layouts, scenes, events, checkpoints and locks.
+
+## Getting to Storm Eagle in tests (verified by verify_storm_eagle.py)
+
+Warping into his deck (checkpoint 2, x 6656–7168) doesn't start the fight: he only comes after the ride.
+Route from checkpoint 1: on the airship's wing tip (x≈6302, y 351), jump left over the pit onto the
+platform at x≈6250. Checkpoint becomes 2, X is held in step `$46` while the platform carries him up to the
+deck (x≈6081, y 207) and Eagle flies in (his state 2: descends, lands, HP to 32); X is let go the frame Eagle
+enters state 4. The deck runs from about x 5760 to 6300, with a pit on both sides. His Gust pushes X 2 px a
+frame and X walks at 1.5 (no dash before Chill Penguin's leg upgrade), so tests walk into the wind and come
+back to the middle between attacks; the tornado pushes too.
+
+Tests load a save state made on the wing tip, `work/states/storm_eagle_wing.mss`, with `Run(savestate=...)`.
+`work/` isn't in git (a save state holds the game's RAM and video memory), so make your own:
+
+1. `python3 testwarp.py 5 --run` (boots straight into his stage at its normal start, opens the emulator;
+   for Mesen: `../emulator/mesen.sh work/test.sfc`).
+2. Play to the wing tip just before the platform (checkpoint 1, x≈6302) and save state slot 1 (Shift+F1).
+3. `cp ~/.config/Mesen2/SaveStates/test_1.mss work/states/storm_eagle_wing.mss`
+
+Mesen's Lua can only load a state from inside a memory callback (`emu.loadSavestate` does nothing from a
+frame event), and test scripts have no file access, so `Run` writes the state's bytes into the script.

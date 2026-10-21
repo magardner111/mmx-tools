@@ -8,6 +8,7 @@ if it doesn't match, so we never patch the wrong place in an unexpected ROM.
 Speeds are 16-bit fixed point, 1/256 px per frame (0x0600 = 6 px/frame) (?).
 Frames are 1/60 s.
 """
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 
 
@@ -25,7 +26,7 @@ class Param:
     min: int = 0
     max: int | None = None
     noun: str = ""            # word shown after counts/ids, e.g. "shots"
-    copies: tuple = ()        # other operand addresses that must hold the same value
+    copies: tuple = ()        # other operands that must hold the same value: address, or (address, opcode)
 
 
 # --- weapons -----------------------------------------------------------------------
@@ -180,17 +181,24 @@ CHILL_PENGUIN = Boss(
         addr=0x86C45B, attacks={0: "Ice Shot", 2: "Blizzard", 4: "Belly Slide", 6: "Jump at X", 8: "Ice Breath"},
         rows=["after Ice Shot", "after Blizzard", "after Belly Slide", "after Jump at X", "after Ice Breath"],
         desc="Rows = the attack he just finished; 16 random picks per row. A flinch uses the 'after Ice Shot' row.")],
-    fields={0x2F: "f2F", 0x30: "f30", 0x33: "palette_bits", 0x34: "timer", 0x35: "invuln_timer",
+    # every name, value and attack below is checked in the running game by verify_chill_penguin.py
+    fields={0x2F: "airborne", 0x30: "x_dead", 0x33: "palette_bits", 0x34: "timer", 0x35: "invuln_timer",
+            0x37: "flinch_timer",
             0x36: "shots", 0x38: "can_flinch", 0x39: "sliding"},
     attack_handlers=["ice_shot", "blizzard", "belly_slide", "jump_at_x", "ice_breath", "flinch"],
     func_names={0x81C019: "choose_next_attack", 0x81BF16: "breath_spawn_particle",
                 0x81BF5C: "spawn_ice_statue"},
     attacks_doc={
-        "Ice Shot": "Turns to X, fires the ice shots on animation keyframes, then idles.",
-        "Blizzard": "Leaps to the room's centre, grabs the ceiling hook and starts the wind, hangs, drops.",
-        "Belly Slide": "Turns to X, slides, bounces off walls, slows to a stop. No recovery pause (BEQ quirk).",
-        "Jump at X": "Jumps with horizontal speed = (X.x − his x) × 4, lands, pauses 30 frames.",
-        "Ice Breath": "Breathes ice, then makes two statues. Replaced by Ice Shot while a statue still stands.",
+        "Ice Shot": "Turns to X before each shot and fires the ice shots (enemy shot 6) one per keyframe, 55 frames "
+                    "apart, then idles 120 frames. Fire Wave destroys the shots in flight.",
+        "Blizzard": "Jumps (vy $7DE) to 10 px short of the room's centre (camera limit + 128), grabs the ceiling "
+                    "hook, signals it (hook byte $1B = 1 → hook state 6, wind for about 150 frames), hangs 30 "
+                    "frames, drops, lands, waits 30.",
+        "Belly Slide": "Turns to X and slides at $600 (damage class 0: hits deflected; can't flinch), braking each "
+                       "frame and bouncing off walls; picks the next attack the same frame it stops (BEQ quirk).",
+        "Jump at X": "Jumps with horizontal speed = (X.x − his x) × 4, vy $87E; lands, pauses 30 frames.",
+        "Ice Breath": "Breathes for 60 frames (a particle every 8), then makes two statues $30 and $50 in front, "
+                      "waits 60 + 30. Picked while a statue still stands, it turns into Ice Shot.",
     },
 )
 
@@ -218,7 +226,8 @@ LAUNCH_OCTOPUS = Boss(
     attack_tables=[AttackTable(
         addr=0x86C625, row_len=32, total=32,
         attacks={0: "Torpedo hop", 2: "Whirlpool & drain", 4: "Piranha swarm", 6: "Torpedo volley"},
-        rows=DIST + [f"{r}, tentacles cut" for r in DIST],
+        # $81:CA07 picks the row as 0 = close, $20 = far, $40 = mid (+$60 once the tentacles are cut)
+        rows=(lambda d: d + [f"{r}, tentacles cut" for r in d])([DIST[0], DIST[2], DIST[1]]),
         desc="Rows = X's distance (and whether his tentacles are cut); 32 random picks per row.")],
     attacks_doc={
         "Torpedo hop": "Hops toward X (random height) firing homing torpedoes on the way up and down.",
@@ -227,6 +236,12 @@ LAUNCH_OCTOPUS = Boss(
         "Piranha swarm": "Releases four piranhas (enemy object 08) around himself.",
         "Torpedo volley": "Turns to X and fires torpedoes on animation keyframes.",
     },
+    fields={0x0C: "cut_hits_left", 0x30: "x_dead", 0x33: "palette_bits", 0x34: "timer", 0x36: "tentacles_cut",
+            0x37: "row", 0x39: "spinning", 0x3A: "deflecting", 0x3B: "drain_tick", 0x3C: "invuln_timer",
+            0x3D: "resume_attack"},
+    attack_handlers=["torpedo_hop", "whirlpool", "piranha_swarm", "torpedo_volley", "flinch", "fall"],
+    func_names={0x81CA07: "choose_next_attack", 0x81CA45: "set_pose", 0x81CA55: "fire_torpedoes",
+                0x81CAB7: "tentacle_hit", 0x81C88D: "whirlpool_end"},
 )
 
 STING_CHAMELEON = Boss(
@@ -248,13 +263,23 @@ STING_CHAMELEON = Boss(
         count("tongue_lashes", "Tongue lashes (max)", 0x888C19, 3, "lashes", prev=CMP_IMM),
     ],
     attacks_doc={
-        "Leap": "1 in 4: high leap toward the room's side; otherwise a jump across.",
-        "Cloak": "Turns invisible (can't be hit), drifts to a new spot, reappears.",
-        "Wall hop": "Hops up to the ceiling or along the wall, dropping toward X up to 3 times.",
+        "Leap": "1 in 4: high leap toward a side (48 px from the screen edge) that turns into Chameleon Sting "
+                "at the top; otherwise a lower jump (64 px from the edge) that turns into Ceiling shake.",
+        "Cloak": "Fades his palette out (can't be hit or hurt X while cloaked), waits, then glides invisibly "
+                 "toward a high corner of the screen.",
+        "Wall hop": "Still cloaked: up to 3 hops toward mid-height; after each he checks 4 tongue lengths and, "
+                    "if X is in reach, reappears straight into a tongue lash. Otherwise fades back in.",
         "Ceiling shake": "Hangs from the ceiling and shakes it so spikes fall (object 11).",
-        "Chameleon Sting": "Turns to X and fires the 3-way shot; repeats with a 3-in-4 chance, up to 3 volleys.",
+        "Chameleon Sting": "Turns to X and fires the 3-way shot aimed with angle_between; repeats with a 3-in-4 "
+                           "chance, up to 3 volleys.",
         "Tongue": "Lashes his tongue toward X up to 3 times, then jumps or cloaks (50/50).",
     },
+    fields={0x2F: "airborne", 0x30: "x_dead", 0x33: "invuln_timer", 0x34: "timer", 0x35: "effect_slot",
+            0x37: "cloaked", 0x38: "count", 0x39: "tongue_length", 0x3A: "palette_bits"},
+    attack_handlers=["leap", "cloak", "cloaked_move", "ceiling_shake", "chameleon_sting", "tongue", "knockback"],
+    func_names={0x88879A: "flash_hurt_draw", 0x8887F7: "start_leap", 0x8889E1: "cloaked_hop",
+                0x888D2F: "set_cloak_palette", 0x888D79: "claim_effect_slot", 0x888DAB: "fade_in_step",
+                0x888E0F: "fade_out_step", 0x888E4F: "x_in_tongue_reach", 0x888EB9: "fire_sting"},
 )
 
 ARMORED_ARMADILLO = Boss(
@@ -287,6 +312,13 @@ ARMORED_ARMADILLO = Boss(
         "Guard": "Between attacks he faces X; incoming shots make him raise his armor for the guard time.",
         "Counter": "If a charged buster shot hits his guard he absorbs it and fires back.",
     },
+    fields={0x30: "x_dead", 0x31: "last_attack", 0x32: "repeats", 0x33: "armor_off", 0x35: "palette_bits",
+            0x36: "shots_left", 0x37: "guard", 0x38: "invuln_timer", 0x39: "hp_before_hit", 0x3B: "guard_timer",
+            0x3C: "pushback", 0x3D: "piece"},
+    attack_handlers=["rolling_attack", "energy_shots", "guard_and_choose", "counter", "hit"],
+    func_names={0x83B3C7: "hurt_and_draw", 0x83B9C8: "set_pose", 0x83B9FE: "roll_bounce",
+                0x83BA20: "incoming_shot", 0x83BAAA: "deflect_pushback", 0x83BACA: "spawn_armor_piece",
+                0x83BB38: "spawn_debris"},
 )
 
 FLAME_MAMMOTH = Boss(
@@ -312,42 +344,81 @@ FLAME_MAMMOTH = Boss(
     ],
     attack_tables=[AttackTable(
         addr=0x86C843,
-        attacks={0: "Stomp jump", 2: "Trunk shot (oil?)", 4: "Volley (fire?)", 6: "Conveyor stomp"},
+        attacks={0: "Stomp jump", 2: "Oil shot", 4: "Fire volley", 6: "Conveyor stomp"},
         rows=DIST + [f"{r}, trunk cut" for r in DIST],
         desc="Rows = X's distance (and whether his trunk is cut); 16 random picks. Ignored when X is high up.")],
     attacks_doc={
-        "Stomp jump": "Jumps at X (speed = distance × 4); the landing shakes the screen and stuns a grounded X.",
-        "Trunk shot (oil?)": "Fires object 21 that lands and slides on the belt; at most 2 at a time.",
-        "Volley (fire?)": "Fires 3–5 shots (object 20).",
-        "Conveyor stomp": "Stomps to reverse the conveyor belt.",
+        "Stomp jump": "Jumps at X (speed = distance × 4); the landing shakes the screen for 75 frames and "
+                      "stuns X if he is on the ground within 30 frames of it.",
+        "Oil shot": "Spits enemy shot 0x21 from his trunk; it lands as a puddle that rides the conveyor. At most "
+                    "2 at a time (otherwise he re-rolls).",
+        "Fire volley": "Fires 3–5 shots (enemy shot 0x20, count 4 ± 1 at random) one per animation keyframe.",
+        "Conveyor stomp": "Stomps, waits 60 frames, flips the belt direction and swaps the conveyor tiles "
+                          "(load_stage_tiles). Forced whenever an oil puddle comes within 64 px of the edge; "
+                          "resumes an unfinished volley afterwards.",
     },
+    fields={0x2F: "airborne", 0x30: "x_dead", 0x33: "palette_bits", 0x34: "timer", 0x35: "shots_left",
+            0x36: "trunk_hp", 0x37: "pose", 0x38: "belt_direction", 0x39: "invuln_timer",
+            0x3A: "stun_window", 0x3B: "last_attack", 0x3C: "repeats"},
+    attack_handlers=["stomp_jump", "oil_shot", "fire_volley", "conveyor_stomp"],
+    func_names={0x879663: "choose_next_attack", 0x879687: "pick_from_table", 0x87971B: "landing_stun",
+                0x87973C: "check_oil_near_edge"},
 )
 
 STORM_EAGLE = Boss(
     key="storm_eagle", name="Storm Eagle", object_id=0x52, level=5, routine=0x87D85C,
     weakness="Chameleon Sting",
-    summary=("Not placed directly: trigger object 20 (type 2) locks the camera and spawns him (enemy 52). "
-             "Picks attacks from per-attack weights (out of 32). No special weapon reaction."),
+    summary=("Fought on top of the airship after a platform ride (his object appears during the ride; trigger "
+             "object 20 (type 2) may be what spawns him (?)). Picks attacks from per-attack weights (out of 32): "
+             "Gust (blows X toward the edge), Dive (often a chain of 6-9), Storm Tornado (also pushes X), or "
+             "Birds (an egg that hatches into 4 birds). No special weapon reaction."),
     damage_class=7,
-    params=[max_hp(0x87D95F), invuln(0x87D9F7)],
+    params=[max_hp(0x87D95F), invuln(0x87D9F7),
+            Param("gust_push", "Gust push on X", 0x87DAE5, "u16", 0x0200, "speed",
+                  "Added to X's position every frame while X is on the side he faces and less than 16 px below "
+                  "him (8.8: $0200 = 2 px; X walks at 1.5).",
+                  prev=SBC_IMM, max=0x7FFF, copies=((0x87DAFF, ADC_IMM),))],
     attack_tables=[AttackTable(
         addr=0x86D41B, fmt="weights", row_len=4, total=32,
-        attacks={0: "Fly up / hover (?)", 2: "Dive", 4: "Storm Tornado", 6: "Gust / birds (?)"},
-        rows=["after Fly up", "after Dive", "after Storm Tornado", "after Gust"],
-        desc="Rows = the attack he just finished; weights out of 32.")],
+        attacks={0: "Gust", 2: "Dive", 4: "Storm Tornado", 6: "Birds"},
+        rows=["after Gust", "after Dive", "after Storm Tornado", "after Birds"],
+        desc="Rows = the attack he just finished; weights out of 32 (Birds, Tornado and Dive are tested in "
+             "that order; Gust gets what's left).")],
+    # every value and attack below is checked in the running game by verify_storm_eagle.py
     attacks_doc={
-        "Fly up / hover (?)": "Flies up for a random 120, 240 or 360 frames.",
-        "Dive": "Swoops across the deck at X from one side (speed 0x400).",
-        "Storm Tornado": "Fires tornado projectile (object 24).",
-        "Gust / birds (?)": "Not traced in detail yet.",
+        "Gust": "Lands if airborne, then flaps (pose 1) for a random 120, 240 or 360 frames: X on the side he "
+                "faces and less than 16 px below him is pushed 2 px/frame away, more than X's walking speed "
+                "(1.5); wind effect every 3 frames; then a 40-frame pause.",
+        "Dive": "Flies above the screen, then dives at 4 px/frame on both axes from X.x ± (X.y − his y), i.e. "
+                "on a 45° line through X, and exits below; waits 40 frames and comes back from the top. "
+                "One dive, or (12 in 16) a chain of 6-9.",
+        "Storm Tornado": "Lands if airborne, then fires one tornado (enemy shot 0x24, speed 4 then 2 px/frame) "
+                         "from his beak (pose 3). It carries X along: walking into it X still loses 1.5 px/frame.",
+        "Birds": "Flies up (vy $100) for 90 frames, then drops eggs (enemy 0x55) on animation keyframes; each "
+                 "egg hatches after 30 frames into 4 birds (enemy 0x56, sub-ids 0-3); then a 20-frame pause.",
     },
+    fields={0x2F: "airborne", 0x30: "x_dead", 0x33: "palette_bits", 0x34: "timer", 0x36: "dives_left",
+            0x37: "invuln_timer", 0x38: "pose", 0x39: "wind_timer"},
+    state_names=["init", "intro", "fight", "death"],
+    attack_handlers=["gust", "dive", "storm_tornado", "birds"],
+    func_names={0x87DE1F: "choose_next_attack", 0x87DE3F: "wing_sounds", 0x87DE63: "gust_wind_effect",
+                0x87D8D1: "intro_appear", 0x87D902: "intro_fall", 0x87D93D: "intro_land",
+                0x87D94A: "intro_fill_hp", 0x87D992: "intro_wait",
+                0x87DA37: "gust_start", 0x87DA98: "gust_land", 0x87DABD: "gust_blow", 0x87DB27: "gust_pause",
+                0x87DB44: "dive_rise", 0x87DB7D: "dive_aim", 0x87DBEC: "dive_down", 0x87DC10: "dive_offscreen",
+                0x87DC46: "dive_return", 0x87DC6C: "dive_pause",
+                0x87DC89: "tornado_start", 0x87DCCD: "tornado_land", 0x87DCE4: "tornado_fire",
+                0x87DD25: "tornado_end",
+                0x87DD3E: "birds_start", 0x87DD71: "birds_rise", 0x87DD82: "birds_drop_eggs",
+                0x87DDD0: "birds_pause"},
 )
 
 SPARK_MANDRILL = Boss(
     key="spark_mandrill", name="Spark Mandrill", object_id=0x31, level=6, routine=0x889BE1,
     weakness="Shotgun Ice",
-    summary=("Picks attacks from per-attack weights (out of 32), cycling like Chill Penguin. Shotgun Ice "
-             "freezes him; a charged buster shot at the right moment of his dash punch staggers him."),
+    summary=("Picks attacks from per-attack weights (out of 32): Electric Spark, Ceiling drop, Dash punch "
+             "(its quake stuns a grounded X) and Jump at X. Normal hits never interrupt him; Shotgun Ice "
+             "freezes him, and a charged buster shot during the dash staggers him."),
     damage_class=0x0A, damage_shared_with="Vile, outside his ride armour (Sigma 1)",
     params=[
         max_hp(0x889D29),
@@ -358,49 +429,78 @@ SPARK_MANDRILL = Boss(
         proj("stagger_b", "Dash-stagger shot B", 0x889DEB, 0x02),
         proj("stagger_c", "Dash-stagger shot C", 0x889DEF, 0x03),
         speed("dash_speed", "Dash punch speed", 0x88A0B3, 0x0400, mirror=0x88A0B8),
-        speed("jump_speed", "Jump launch speed", 0x889F48, 0x06C3),
-        speed("leap_speed", "Leap-at-X launch speed", 0x88A198, 0x070D),
+        speed("jump_speed", "Ceiling-drop jump launch speed", 0x889F48, 0x06C3),
+        speed("leap_speed", "Jump-at-X launch speed", 0x88A198, 0x070D),
     ],
     attack_tables=[AttackTable(
         addr=0x86CFDB, fmt="weights", row_len=4, total=32,
-        attacks={0: "Electric Spark", 2: "Jump & quake (?)", 4: "Dash punch", 6: "Leap at X (?)"},
-        rows=["after Electric Spark", "after Jump", "after Dash punch", "after Leap"],
+        attacks={0: "Electric Spark", 2: "Ceiling drop", 4: "Dash punch", 6: "Jump at X"},
+        rows=["after Electric Spark", "after Ceiling drop", "after Dash punch", "after Jump at X"],
         desc="Rows = the attack he just finished; weights out of 32.")],
     attacks_doc={
-        "Electric Spark": "Strikes the floor, sending sparks (object 28) along the ground.",
-        "Jump & quake (?)": "High jump; the landing shakes the screen.",
-        "Dash punch": "Charges across the floor (0x400). A charged buster shot mid-dash staggers him.",
-        "Leap at X (?)": "Leaps toward X's position.",
+        "Electric Spark": "Punches the floor: two sparks (enemy shot 0x28, sub-ids 0 and $28) run along the "
+                          "ground; small screen shake.",
+        "Ceiling drop": "Jumps to the ceiling, hand-walks toward X 28 px per swing, drops once he passes X "
+                        "(or meets a wall); heavy landing with a screen shake.",
+        "Dash punch": "Probes 34/50/56 px ahead: if clear, charges at 0x400 into the wall, otherwise punches "
+                      "on the spot. The punch quakes the screen for 30 frames and stuns X if X is on the ground. "
+                      "A charged buster shot mid-dash staggers him into a sliding knockback.",
+        "Jump at X": "Jumps with horizontal speed = (X.x − his x) × 4 (like Chill Penguin), lands with a shake.",
+        "Frozen": "Shotgun Ice (either level) drops him to the floor and freezes him for 60 frames; he breaks "
+                  "out in 16 ice shards. Other hits don't interrupt him.",
     },
+    fields={0x2F: "airborne", 0x30: "x_dead", 0x33: "palette_bits", 0x34: "timer", 0x35: "invuln_timer",
+            0x36: "frozen"},
+    attack_handlers=["electric_spark", "ceiling_drop", "dash_punch", "jump_at_x", "stagger", "frozen"],
+    func_names={0x88A362: "choose_next_attack", 0x889E11: "flash_hurt_draw"},
 )
 
 BOOMER_KUWANGER = Boss(
     key="boomer_kuwanger", name="Boomer Kuwanger", object_id=0x05, level=7, routine=0x878A7E,
     weakness="Homing Torpedo",
-    summary=("Teleports around and picks attacks from two tables. While teleporting he can only be hit if X "
-             "has Homing Torpedo selected. His Dead Lift grabs X and throws him to the ceiling."),
+    summary=("Dashes at X, throws his horn as a boomerang, or teleports next to X (invisible; only hittable "
+             "with Homing Torpedo selected). Whenever X is within 32 px in front of him he uses Dead Lift: "
+             "grabs X and throws him up into the ceiling for 4 damage. Below 17 HP a hit can send him into "
+             "a streak of 6-13 teleports."),
     damage_class=0x0D,
     params=[
         max_hp(0x878BE8),
         invuln(0x878C59),
-        speed("dash_speed", "Dash speed", 0x878E78, 0x0800),
-        speed("move_speed", "Teleport-move speed", 0x878D25, 0x0400),
+        speed("teleport_speed", "Teleport speed", 0x878E78, 0x0800),
+        speed("dash_speed", "Dash speed", 0x878D25, 0x0400),
     ],
     attack_tables=[
-        AttackTable(addr=0x86C5A3, attacks={0: "Teleport (?)", 2: "Boomerang", 4: "Dash"},
-                    rows=["after teleport (state < 9)", "after teleport (state ≥ 9)"],
-                    title="Attack pattern A",
-                    desc="Used after he reappears; row picked by object field $31 (meaning unconfirmed)."),
-        AttackTable(addr=0x86C5C3, attacks={0: "Teleport (?)", 2: "Boomerang", 4: "Dash"},
-                    rows=["X far (≥ 128 px)", "X close (< 128 px)"], title="Attack pattern B",
-                    desc="Used after other attacks; row picked by X's distance."),
+        AttackTable(addr=0x86C5A3, attacks={0: "Dash", 2: "Boomerang", 4: "Teleport"},
+                    rows=["after a short dash (< 9 frames)", "after a long dash (≥ 9 frames)"],
+                    title="After a dash",
+                    desc="Used when a dash ends; row picked by how long he ran (field $31)."),
+        AttackTable(addr=0x86C5C3, attacks={0: "Dash", 2: "Boomerang", 4: "Teleport"},
+                    rows=["X far (≥ 128 px)", "X close (< 128 px)"], title="After a teleport",
+                    desc="Used when he reappears; row picked by X's distance."),
     ],
     attacks_doc={
-        "Teleport (?)": "Vanishes and reappears near X.",
-        "Boomerang": "Throws his boomerang horns (enemy projectile).",
-        "Dash": "Charges across the room at 0x800.",
-        "Dead Lift": "Grabs X (sets X's position) and throws him upward with a screen shake.",
+        "Dash": "Faces X and runs at 4 px/frame, either all the way to X or a short 32 px burst; Dead Lift "
+                "if X ends up within 32 px in front.",
+        "Boomerang": "Throws his horns (enemy shot 0x1B); uses hornless poses until they come back.",
+        "Teleport": "Vanishes (blinking, only Homing Torpedo can hit him) and moves at 8 px/frame to "
+                    "X ± 28/48/80 px or near a screen edge, then reappears.",
+        "Dead Lift": "Not in the tables: used whenever X is within 32 px in front. Grabs X, holds him 32 px "
+                     "in front, then lifts him 8 px/frame until X hits the ceiling: 4 damage and a screen shake. "
+                     "Hitting him before the throw drops X.",
     },
+    fields={0x30: "x_dead", 0x31: "dash_frames", 0x32: "teleport_streak", 0x33: "palette_bits",
+            0x34: "timer", 0x35: "boomerang_out", 0x36: "scratch", 0x37: "boomerang_caught",
+            0x38: "teleporting", 0x39: "blink", 0x3A: "target_x", 0x3C: "lift", 0x3D: "invuln_timer",
+            0x3E: "resume_attack"},
+    attack_handlers=["dash", "boomerang", "teleport", "dead_lift", "flinch"],
+    func_names={0x8790B1: "set_pose", 0x8790C1: "pick_teleport_target", 0x879113: "try_dead_lift",
+                0x879129: "x_in_lift_range", 0x879131: "x_in_front_within", 0x879170: "dead_lift_throw",
+                0x8790D6: "target_x_28", 0x8790DB: "target_x_48", 0x8790E0: "target_x_80",
+                0x8790FE: "target_screen_edge",
+                0x878AE7: "beam_in_start", 0x878B1A: "beam_in_right", 0x878B59: "beam_in_down",
+                0x878B94: "beam_in_right_2", 0x878BCB: "fill_hp", 0x878BF8: "intro_end",
+                0x879050: "resume_dash", 0x879059: "resume_boomerang", 0x87906A: "resume_teleport",
+                0x879077: "resume_dead_lift"},
 )
 
 # --- fortress bosses (identified by placement + sprite; behaviour not traced yet) ----------
@@ -408,35 +508,139 @@ FORTRESS_NOTE = "Identified by stage placement and sprite; attacks not traced ye
 
 BOSSPIDER = Boss(
     key="bosspider", name="Bosspider (Sigma 1)", object_id=0x63, level=9, routine=0x82DB7D,
-    summary="End boss of Sigma stage 1 (its sprite is the spider). " + FORTRESS_NOTE,
+    summary=("Rides a web drawn into the stage's collision map. Drops in from one of 4 columns, shows a random "
+             "path through the web, then walks it down (turning where the collision says so) and climbs back "
+             "up. Drops baby spiders when X is level with him. Gets faster below 16 and 8 HP."),
     damage_class=0x0A, damage_shared_with="Spark Mandrill",
     params=[max_hp(0x82DC15)],
-    notes=["Uses damage class 13 (or 18) in one phase and class 0A in another.",
+    attacks_doc={
+        "Drop in": "Picks one of 4 x positions ($86:D65C) and descends; speed from $86:D6A2 by HP "
+                   "(≥ 16, ≥ 8, below 8).",
+        "Show path": "Picks a random route (up to 8 left/right choices) and lights it with marker effects "
+                     "(effect 0x3C at $86:D68C/$86:D692), then waits 60 frames.",
+        "Walk the web": "Follows the route: probes 16 px above him; collision $14 = turn right, $16 = turn left, "
+                        "$15 = keep going down. Same HP-based speed.",
+        "Babies": "When X is within 32 px of his height (and fewer than 8 exist), or 1 in 4 at the end of a "
+                  "drop: releases 8 baby spiders (enemy shot 0x2B; offsets/speeds from $86:D664).",
+        "At the bottom": "Damage class $0A (hurtable) for 24 frames, then climbs back to the top. Elsewhere his "
+                         "class is 0 (every weapon a special $80 entry: deflected (?)).",
+    },
+    notes=["Hit: 24 frames of damage class 5 (no damage) and flashing.",
+           "Death: freezes objects, flashes the web palette ($7F:D06C...), then removes the HUD bar "
+           "(hud_boss_bar_state = 4) and sets $1F7B (stage exit (?)).",
            "Vile is object 69: never placed in a stage, so he's spawned by a script."],
+    fields={0x0D: "dropped_babies", 0x1F: "landed", 0x2F: "step_sound", 0x34: "palette_bits", 0x35: "timer",
+            0x36: "f36", 0x37: "baby_index", 0x3A: "path_choice", 0x3B: "path_left", 0x3C: "path_dir",
+            0x3D: "web_tile", 0x3E: "speed_index", 0x3F: "invuln_timer"},
+    attack_handlers=["pick_drop", "pick_path", "walk_down", "walk_across", "drop_in", "babies", "climb_up",
+                     "show_path", "at_bottom"],
+    func_names={0x82DC7F: "hit_and_draw", 0x82DCD7: "hurt_and_draw", 0x82DD0D: "start_drop",
+                0x82DD52: "next_path_choice", 0x82DDA8: "path_done", 0x82E0B9: "maybe_drop_babies",
+                0x82E0E7: "start_babies", 0x82E0F6: "follow_web", 0x82E114: "web_junction",
+                0x82E184: "count_babies", 0x82E1B9: "spawn_path_marker"},
 )
 RANGDA_BANGDA = Boss(
-    key="rangda_bangda", name="Rangda Bangda (Sigma 2) (?)", object_id=0x5D, level=10, routine=0x88A985,
-    summary="End boss of Sigma stage 2 (sprite: eye orb). " + FORTRESS_NOTE,
+    key="rangda_bangda", name="Rangda Bangda (Sigma 2)", object_id=0x5D, level=10, routine=0x88A985,
+    summary=("A controller, not a body: it spawns two eyes (object 0x5E), the nose (0x5F) and closing walls "
+             "(0x60), shows their combined HP in the boss bar, and tells the parts what to do. Each round: a "
+             "random number of eye attacks, then the walls close in while the nose attacks. Ends when all "
+             "three parts are destroyed."),
     params=[max_hp(0x88AA38)],
-    notes=["Its damage class is set elsewhere (probably by its parts)."],
+    attacks_doc={
+        "Eyes": "Picks how many eye attacks this round ($86:D4F4), then which eye and which attack "
+                "($86:D504 / $86:D524; both eyes at once once one is gone), each with 2-5 repeats (field $3A).",
+        "Walls + nose": "Unless the nose is destroyed: spawns the two wall halves (0x60) and, when they signal "
+                        "($1F42), starts the nose's attack.",
+        "Death": "Freezes objects, 255 frames of explosions over a 128 x 128 area with screen shakes, then "
+                 "the room fades out from white.",
+    },
+    notes=["Damage is handled by the parts; the boss bar is eye + eye + nose HP.",
+           "Before the fight it locks the camera at x $1400 and fades the palette in 4 steps."],
+    state_names=["setup", "fight", "death"],
+    fields={0x30: "f30", 0x33: "left_eye", 0x35: "right_eye", 0x37: "nose", 0x39: "eye_attacks_left",
+            0x3A: "repeats", 0x3B: "timer", 0x3D: "fade_level", 0x3E: "palette_step"},
+    func_names={0x88ACDD: "spawn_eyes", 0x88AD1A: "spawn_nose", 0x88AD3B: "spawn_walls",
+                0x88AD66: "total_hp", 0x88AD92: "fade_palette_1", 0x88ADB9: "fade_palette_all",
+                0x88ADFC: "clear_fade_table"},
 )
 D_REX = Boss(
     key="d_rex", name="D-Rex (Sigma 3) (?)", object_id=0x62, level=11, routine=0x88BF48,
-    summary="End boss of Sigma stage 3 (sprite: dragon-headed tank). " + FORTRESS_NOTE,
+    summary=("A tank drawn on a background layer (it moves by scrolling that layer, $1E8D/$1E90) that X can "
+             "stand on: it carries X along. It spawns a separate part (object 0x61) and coordinates with it "
+             "through part1-3_status. Its own attack is ramming the walls; X gets crushed (6 damage) if "
+             "pinned against one."),
     params=[max_hp(0x88C0FD)],
-    notes=["Its damage class is set elsewhere (probably by its parts)."],
+    attacks_doc={
+        "Entrance": "Locks the camera at x $1100, loads its layer, drops in bouncing (quake + sound $20 per bounce), "
+                    "fills its HP, waits 120 frames.",
+        "Ram": "Drives at ±$200 (+$200 more once the part is below 16 HP; a random 12 in 16 uses another speed) "
+               "until it hits a wall: screen quake for 40 frames, stuns X if he's on the ground.",
+        "Follow the part": "Drives to the part's x and rides under it until part1_status is set.",
+        "Back to centre": "Returns to x $11C0, signals part2 (bit 6), waits for it (192), 120 frames, then part3.",
+        "Crush": "If X is pressed between it and a wall: 6 damage.",
+        "Death": "48 frames, then 255 frames of explosions (64 x 32 area) with shakes; waits for part1, then "
+                 "despawns.",
+    },
+    notes=["Its HP bar is its own HP; it ignores hits during the intro (field $34 bit 7)."],
+    state_names=["setup", "fight", "death"],
+    fields={0x2C: "x_on_top", 0x33: "timer", 0x34: "flags", 0x35: "part"},
+    attack_handlers=["start_death", "explode", "wait_part", "pause"],
+    func_names={0x88C2FB: "sync_layer", 0x88C310: "spawn_part", 0x88C333: "x_standing_check",
+                0x88C38E: "crush_x", 0x88C3A6: "alive"},
 )
 SIGMA = Boss(
     key="sigma", name="Sigma (Sigma 4)", object_id=0x65, level=12, routine=0x88C3B2,
-    summary="Final stage, 10 top-level states with two HP fills (two fights in one object). " + FORTRESS_NOTE,
+    summary=("The whole final sequence in one object: sends in his dog (enemy 0x26, Velguarder (?)), then "
+             "fights as Sigma, then becomes Wolf Sigma (two hand objects 0x6B and his head) with a second HP "
+             "fill. Talks through text boxes between phases."),
     params=[max_hp(0x88C67B),
             Param("max_hp_2", "Max HP (second fight)", 0x88CB78, "u8", 0x20, "hp", prev=CMP_IMM, min=1, max=0x7F)],
-    notes=["Damage classes 12 and 13 are used in its two phases.", "Object 68 (also in Sigma 4) is a small helper."],
+    attacks_doc={
+        "Dash": "Runs at X at 4 px/frame for distance/4 frames; slashes if X enters his sword box.",
+        "Jump dash": "Jumps at X at 6 px/frame until he hits a wall, then kicks off it.",
+        "Shots": "Two kinds: enemy shot 0x2D, and 0x2C with sound $50 (slash wave (?)).",
+        "Guard": "Damage class 0: shots are deflected (sound $47).",
+        "Choosing": "After each move: guard or stand (50/50); standing picks the next move from weights out of "
+                    "16 at $86:D7A9.",
+        "Wolf Sigma": "Every 16-79 frames: half the time one hand attacks (part2/part3 status); otherwise the "
+                      "head fires 9 slow shots (0x31, every 16 frames) or a 32-shot stream (0x32, every 3 frames).",
+        "End": "Freezes everything, 240-frame quakes with explosions, a text box, then sets fortress_cleared = 4 "
+               "and puts X in step $34.",
+    },
+    notes=["Damage classes: $12 as Sigma, $13 as Wolf Sigma (0 while invulnerable there, 5 as Sigma).",
+           "Object 68 (also in Sigma 4) is a small helper."],
+    state_names=["setup", "entrance", "send_dog", "wait_for_dog", "sigma_intro", "sigma_fight",
+                 "sigma_defeated", "wolf_intro", "wolf_fight", "final_death"],
+    fields={0x2F: "airborne", 0x30: "x_dead", 0x33: "timer", 0x34: "palette_bits", 0x35: "invuln_timer",
+            0x36: "pose", 0x38: "shots_left", 0x39: "quake_timer", 0x3D: "aim"},
+    func_names={0x88C74D: "dash", 0x88C7E0: "jump_dash", 0x88C84F: "shot_2D", 0x88C89F: "slash_wave",
+                0x88C8EA: "guard", 0x88C91F: "wall_kick", 0x88C9AE: "wall_kick_2", 0x88CA14: "stand",
+                0x88CC48: "wolf_choose", 0x88CC93: "wolf_hand_attack", 0x88CCAA: "wolf_slow_shots",
+                0x88CCF0: "wolf_stream", 0x88CEBB: "quake_tick", 0x88CEC8: "explosion_tick",
+                0x88CEE8: "guard_or_stand", 0x88CEFB: "choose_next_move"},
 )
 
 BOSSES = {b.key: b for b in [LAUNCH_OCTOPUS, STING_CHAMELEON, ARMORED_ARMADILLO, FLAME_MAMMOTH,
                              STORM_EAGLE, SPARK_MANDRILL, BOOMER_KUWANGER, CHILL_PENGUIN,
                              BOSSPIDER, RANGDA_BANGDA, D_REX, SIGMA]}
+
+# X himself (see PLAYER.md). Not a boss: kept out of BOSSES so the editor doesn't list it, but decomp.py
+# uses it for `python3 decomp.py x` (X's update at $81:812E, direct page = his slot at $0BA8).
+PLAYER = SimpleNamespace(
+    key="x", name="X", routine=0x81812E,
+    fields={0x0E: "visible", 0x26: "pending_damage", 0x30: "hurt_lock", 0x6B: "flash_timer",
+            0x36: "buttons", 0x37: "dpad", 0x38: "buttons_prev", 0x3A: "buttons_new", 0x5E: "touch_any",
+            0x69: "facing",
+            0x89: "untouchable_2", 0x8A: "untouchable"},
+    state_names=["init", "alive"],
+    attack_handlers=[],
+    func_names={0x8181A3: "init", 0x81825D: "alive",
+                0x8182EE: "step_normal", 0x81839D: "step_walk_start", 0x818408: "step_walk",
+                0x818486: "step_jump", 0x818522: "step_fall", 0x81883E: "step_wall_slide",
+                0x818A4F: "step_dying", 0x81865B: "step_hurt", 0x818B3B: "step_grabbed",
+                0x818B4D: "step_hold", 0x818B57: "step_boss_freeze", 0x8189FA: "step_beam_in",
+                0x818B4E: "step_boss_door"},   # step $46 also runs step_boss_freeze (Storm Eagle's ride)
+)
 
 # Names we're confident about (id -> name) in the *enemy* object table ($80F8DD).
 # Projectiles/effects a boss spawns use other allocators/lists with their own ids:
@@ -445,7 +649,13 @@ BOSSES = {b.key: b for b in [LAUNCH_OCTOPUS, STING_CHAMELEON, ARMORED_ARMADILLO,
 KNOWN_OBJECT_NAMES = {
     **{b.object_id: b.name for b in BOSSES.values()},
     0x08: "Launch Octopus (copy / piranhas?)",
+    0x26: "Velguarder (Sigma's dog) (?)",
+    0x5E: "Rangda Bangda eye", 0x5F: "Rangda Bangda nose", 0x60: "Rangda Bangda wall",
+    0x61: "D-Rex part (?)",
+    0x6B: "Wolf Sigma hand (?)",
     0x69: "Vile",
     0x2D: "Batton Bone",
     0x4D: "Dr. Light capsule",
+    0x55: "Storm Eagle's egg (hatches into 4 x 0x56)",
+    0x56: "Storm Eagle's bird (sub-id 0-3)",
 }

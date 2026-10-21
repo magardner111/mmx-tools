@@ -18,9 +18,14 @@ ROM = "../Mega Man X (USA) (Rev 1).sfc"
 FIELDS = {
     0x00: "active", 0x01: "state", 0x02: "step", 0x03: "substep", 0x05: "x", 0x08: "y",
     0x0A: "id", 0x0B: "sub_id", 0x0C: "parent", 0x0F: "anim_status", 0x11: "attr",
-    0x17: "keyframe", 0x1A: "vx", 0x1C: "vy", 0x1E: "gravity", 0x20: "anim_ptr",
-    0x27: "hp", 0x28: "damage_class", 0x2B: "touch",
+    0x17: "keyframe", 0x1A: "vx", 0x1C: "vy", 0x1E: "gravity", 0x20: "box_ptr",   # collision box (verified for X: $86:A552)
+    0x04: "x_sub", 0x07: "y_sub", 0x0E: "visible",   # visible: cleared by obj_draw when off screen (?)
+    0x16: "gfx", 0x18: "tile_base",                  # set by obj_start from the graphics tables (?)
+    0x1B: "vx_hi", 0x1D: "vy_hi",                    # sign bytes: vx_hi & 0x80 = moving left, vy_hi & 0x80 = falling
+    0x1F: "friction", 0x22: "prev_x", 0x24: "prev_y",   # prev_x/y: last frame's position (platforms) (?)
+    0x27: "hp", 0x28: "damage_class", 0x29: "probe_x", 0x2A: "probe_y", 0x2B: "touch",
 }
+# anim_status bit 7 = the current animation has finished; hp bit 7 = ask the HUD to redraw the boss bar
 
 TAKES_A = {0x848F07, 0x8088A2, 0x8087A2, 0x84A338}
 
@@ -30,29 +35,101 @@ HELPERS = {
     0x849086: "random",
     0x82FC48: "x_in_range",          # X = range index, Y = also check vertical; 0 = in range
     0x84A081: "angle_to_x",
-    0x84ACA5: "face_x",              # (?)
-    0x8491BE: "check_terrain",       # sets touch ($2B) (?)
-    0x849B43: "hit_check",           # (?)
-    0x849B03: "hurt_x_on_contact",   # (?)
-    0x8281E8: "move_with_gravity",   # (?)
+    0x84ACA5: "face_x",              # turn toward X (Mesen-verified on Chill Penguin)
+    0x8491BE: "check_terrain",       # sets touch ($2B); bit 2 = standing on floor, bits 0/1 = walls (verified)
+    0x82C715: "carry_x",             # move X by how far this object moved (x - prev_x, y - prev_y)
+    0x82D7D7: "x_overlaps_self",     # (?) X alive and inside this object's box
+    0x80E018: "bg_boss_load",        # (?) switch BG to the boss layer mode, start its tile load ($1F27)
+    0x80E008: "bg_boss_ready",       # (?)
+    0x849C0E: "x_in_attack_box",     # (?) carry set if X overlaps the box at box_ptr (grabs, tongue)
+    0x8490A0: "probe_terrain",       # collision value at (x + probe_x, y + probe_y); >= $34 is solid (verified)
+    0x849B43: "hit_check",           # nonzero when a shot hit this object this frame (verified)
+    0x849B03: "hurt_x_on_contact",   # damages X on touch (via $84:9D5C, not x_take_damage) (verified)
+    0x8281E8: "move_with_gravity",   # vy -= gravity, then move (verified: only while airborne)
     0x82820A: "move",                # (?)
     0x828321: "alloc_enemy",
     0x82833E: "alloc_x_shot",
     0x828358: "alloc_enemy_shot",
     0x8282B9: "alloc_misc_1628",
     0x8282D3: "alloc_effect_1928",
-    0x8088A2: "play_sound",          # A = sound id
-    0x8087A2: "play_music",          # (?)
-    0x8280B4: "obj_draw",            # common tail: draw / finish frame (?)
-    0x828398: "obj_despawn",         # (?)
+    0x8088A2: "play_sound",          # A = sound id, panned by the object's distance from X
+    0x8088CD: "play_sound_centered", # A = sound id, no panning
+    0x80887F: "queue_sound",         # A = sound/command id, Y = its parameter byte (sound queue $0B72)
+    0x8087A2: "play_music",          # A = track ($2E boss jingle, $1E boss fight) (verified)
+    0x8280B4: "obj_draw",            # common tail: draw, unless more than 32 px outside the screen
+    0x828011: "load_palette",        # Y = palette set ($86:8133 list), into its own slots
+    0x828000: "load_palette_to",     # same, X = destination slot
+    0x828174: "move_brake_right",    # vy -= gravity, vx -= field $1F, then move
+    0x828195: "move_brake_left",     # vy -= gravity, vx += field $1F, then move
+    0x82806E: "obj_far_offscreen",   # carry set when more than 64 px outside the screen
+    0x82823E: "move_x",              # x += vx (x is 16.8 at $04-$06, vx 8.8)
+    0x82825D: "move_y",              # y -= vy (y is 16.8 at $07-$09; positive vy = up)
+    0x828398: "obj_despawn",         # (verified: a defeated boss disappears through it)
     0x84A338: "screen_shake",        # (?)
-    0x84AADD: "boss_already_beaten",  # (?)
+    0x84AADD: "boss_already_beaten",  # 1 if this stage's boss is beaten (weapon_flags bit 6; stages < 9 only)
+    0x849FEB: "x_freeze_for_boss",   # X step = $1E: X is held still during a boss intro
+    0x84A003: "x_unfreeze",          # X step = 0 (ends x_freeze_for_boss)
+    0x848000: "load_stage_tiles",    # (?) A = entry of this stage's animated-tile list ($84:B8AC), e.g. conveyor
+    0x80B071: "load_object_set",     # A = this stage's enemy graphics set (see gfxsets.py)
+    0x83F74A: "show_dialogue",       # (?) text box (effect 0x2A); dialogue_active bit 7 while it's up
+    0x84A046: "x_step_3A",           # X step $3A (Sigma 4 cutscenes) (?)
+    0x84A019: "x_step_34",           # X step $34 (Sigma 4 ending) (?)
+    0x849F8A: "x_hold",              # X step $18, previous step saved in $0C12 (boss defeated, cutscenes)
+    0x849FB2: "x_resume",            # X step = the one saved by x_hold
+    0x84A00D: "x_stun",              # (?) X step $36 for A frames ($0C2D)
+    0x84A316: "screen_quake",        # (?) A = length; $84A31F takes X/Y strength too
+    0x84A09C: "angle_between",       # (?) from ($0000,$0002) to ($0004,$0006)
+    0x849F19: "x_grabbed",           # X step = $16: held by an enemy (Boomer Kuwanger's Dead Lift)
+    0x849F7E: "x_drop",              # X step = 8: let go of a held X
+    0x81812E: "x_update",
+    0x8499AF: "x_wall_check",        # (?) carry set = wall in the facing direction (stops a walk)
+    0x80E54D: "x_read_buttons",      # pad_held -> X_dpad / X buttons via the button setup (verified)            # X's per-frame update (see PLAYER.md)
+    0x849D07: "x_contact_damage",    # hurt_x_on_contact's hit path: hurt_lock += 1, step $0E, HP -= damage
+    0x849F2F: "x_take_damage",       # X step = $0E (hurt); X_hp -= X_pending_damage (halved by upgrade
+                                     # bit 2 (?)); at 0 HP X step = $0C (dying)
+    0x84A677: "boss_defeated_sequence",  # called every frame of a boss's death state (verified); freezes
+                                         # objects, palette flash to white, explosions, freezes X
+                                         # for the stage clear; negative once finished
+    0x84A4B5: "explode",             # one explosion at self + sound $23 (normal enemy death)
+    0x84A4D0: "random_explosion",    # every (frame & $0008)==0: explosion at self + $0000/$0002 + random
+                                     # (& $0004 / & $0006), random sound $93-$96
+    0x84A467: "spawn_explosion",     # explosion effect (effect object 2) at ($0000, $0002)
+    0x82827D: "obj_start",           # state = 2, damage class 3, tile/palette base for this id (verified)
+    0x80DA0E: "hud_boss_bar",        # draws the boss HP bar for hud_boss
+    0x80D56F: "hud_update",          # (?)
 }
 
 RAM_NAMES = {v & 0xFFFF: k for k, v in RAM.items() if v & 0xFF0000 == 0x7E0000 and v & 0xFFFF < 0x2000}
 RAM_NAMES.update({0x0BAD: "X_x", 0x0BB0: "X_y", 0x0BCF: "X_hp", 0x0BDB: "X_weapon",
                   0x0B9C: "frame_counter", 0x1F1D: "last_hit_projectile", 0x1F7A: "level",
-                  0x1F1B: "hit_direction", 0x1F1E: "last_hit_object", 0x1F26: "music_enabled"})
+                  0x1F1B: "hit_direction", 0x1F1E: "last_hit_object", 0x1F26: "music_enabled",
+                  0x0BAA: "X_step",
+                  0x0BCE: "X_pending_damage", 0x0BD3: "X_touch",
+                  0x0BB6: "X_visible",
+                  0x00A7: "pad_held", 0x00AB: "pad_pressed",   # player 1, SNES bit order (verified)
+                  0x0BDF: "X_dpad",         # X+$37: bit 0 R, 1 L, 2 D, 3 U (verified)
+                  0x0B92: "collision_table_ptr",  # 24-bit; probe_terrain reads [ptr + map] (verified)
+                  0x0BD8: "X_hurt_lock",    # X+$30: nonzero = can't be hurt (hit, grabbed, boss dying);
+                                            # AR code 7E0BD808 holds it at 8 (see PLAYER.md)
+                  0x0C13: "X_flash_timer",  # X+$6B: post-hit blinking; at 0 hurt_lock is cleared
+                  0x0C32: "X_untouchable",  # X+$8A = boss_defeated | hurt_lock | X+$89, every frame
+                  0x0C12: "X_saved_step",   # x_hold keeps the step to go back to here
+                  0x1E50: "screen_top",
+                  0x1F99: "upgrades",       # (?) bit 2 halves damage taken (body armor?)
+                  0x1F3F: "part1_status", 0x1F40: "part2_status", 0x1F41: "part3_status",  # fortress bosses' parts;
+                  0x1F42: "boss_signal",    # bit 7 = destroyed; boss_signal: part -> boss handshakes (?)
+                  0x1F23: "boss_cleared",   # set when a boss is finished (also by boss_already_beaten)
+                  0x1F7B: "fortress_cleared",  # (?) 1 after Bosspider, 2 after Rangda Bangda
+                  0x00CA: "color_math", 0x00CB: "fixed_color_r", 0x00CC: "fixed_color_g",
+                  0x00CD: "fixed_color_b",  # (?) screen fades
+                  0x1F2C: "dialogue_active",  # (?) bit 7 while a text box is open
+                  0x1F27: "bg_load_pending",  # (?) cleared once bg_boss_load's graphics are in
+                  0x1F15: "freeze_enemies",  # (?) one of the boss-defeated freeze counters ($1F13-$1F18)
+                  0x1F0C: "boss_defeated",  # set at boss HP 0: enemies stop hurting X, X's own update reads it
+                  0x1F0E: "hud_boss",       # object whose HP the boss bar shows (0 = no bar)
+                  0x1F10: "hud_boss_bar_state",  # 0 set up, 2 redraw when hp bit 7 set, 4 remove, 6 hide, 8 idle
+                  0x1F86: "weapon_flags",   # [stage*2]: high byte of each weapon's word; bit 6 = that stage's boss beaten
+                  0x1E4D: "screen_left"})   # bosses place themselves at screen_left + $10/$20/$E0
 BRANCH = {"BPL", "BMI", "BVC", "BVS", "BCC", "BCS", "BNE", "BEQ", "BRA", "BRL"}
 
 

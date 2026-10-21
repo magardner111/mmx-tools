@@ -32,25 +32,25 @@ Items marked **(?)** are inferred but haven't been seen running in an emulator.
 | `$0F` | animation status (bit 7 = animation finished) **(?)** |
 | `$11` | sprite attributes (bit 6 = facing / h-flip) |
 | `$1A`, `$1C` | X and Y velocity (16-bit, signed) |
-| `$20` | pointer to the animation script |
+| `$20` | `box_ptr`: pointer to the collision box (verified for X: the wall check reads his box at `$86:A552` through it; bosses set it with `$31`) |
 | `$27` | **HP** (bit 7 used as a flag; `HP & 0x7F` = 0 means dead) |
 | `$28` | **damage class**: which row of the damage table ($86:EF37) applies when X's shots hit it. Class 5 = all zeros (invulnerable) |
-| `$2B` | collision result flags (0x04 = touching wall/floor) **(?)** |
+| `$2B` | `touch`: terrain contact bits; bit 2 = standing on a floor (verified), bits 0/1 = walls |
 | `$33`–`$3F` | free scratch space for each enemy: timers, home position, counters |
 
 ### Engine helpers enemies call
 
 | routine | what it does |
 |---|---|
-| `$82:FC48` | **proximity check**: is X within `range[X]` horizontally (and vertically if Y≠0)? Ranges are in table `$86:E47B`. Returns 0 if in range |
-| `$84:A081` | **angle from enemy to X**, used to aim |
-| `$84:9086` | random number **(?)** |
-| `$84:8F07` | start animation N |
-| `$84:8EEA` | advance the current animation |
-| `$82:820A` | apply velocity to position **(?)** |
-| `$84:90A0` | probe terrain collision at an offset **(?)** |
-| `$84:9B43` | was the enemy hit this frame? **(?)** |
-| `$82:82D3` | allocate a new object (spawn a projectile / child) **(?)** |
+| `x_in_range` (`$82:FC48`) | **proximity check**: is X within `range[X]` horizontally (and vertically if Y≠0)? Ranges are in table `$86:E47B`. Returns 0 if in range |
+| `angle_to_x` (`$84:A081`) | **angle from enemy to X**, used to aim |
+| `$84:9086` | `random` (seed word `$0BA6`; verified by seeding tests) |
+| `$84:8F07` | `anim_start`: start animation N |
+| `$84:8EEA` | `anim_tick`: advance the current animation |
+| `$82:820A` | `move`: apply velocity to position **(?)** |
+| `$84:90A0` | `probe_terrain`: collision value at an offset (verified: lookup in `PLAYER.md`) |
+| `$84:9B43` | `hit_check`: nonzero when a shot hit the object this frame (verified) |
+| `alloc_effect_1928` (`$82:82D3`) | allocate a new object (spawn a projectile / child) **(?)** |
 
 ## Worked example: Batton Bone (id 0x2D, the bats in Chill Penguin's cave)
 
@@ -60,12 +60,12 @@ Code is at `$87:A07F`; run `python3 enemies.py 2D` for the full listing.
 state 0  INIT    HP=2, remember home x/y, pick animation by sub-id,
                  set re-aim interval = 20 + (frame counter & 3) frames
    v
-state 2  HANG    each frame: is X within 128 px horizontally?  ($82:FC48, range 0x80)
+state 2  HANG    each frame: is X within 128 px horizontally?  (`x_in_range` ($82:FC48), range 0x80)
    v   yes
 state 4  SWOOP   sub 0: play the "drop" animation until it finishes
                  sub 2: chase for up to 600 frames ($33 = 0x258):
                         every 20–23 frames ($37, reloaded from $38):
-                            angle = direction to X  ($84:A081)
+                            angle = direction to X  (`angle_to_x` ($84:A081))
                             velocity = sine/cosine table [angle]  ($86:EE37)
                         left its leash box around home (0x128 x 0xC0)? -> state 6
                         variant (sub-id bit 0): every 8 frames spawn object 0x10
@@ -84,14 +84,14 @@ every frame (after the state handler):
 |---|---|
 | "an attack happens at an interval" | **Yes, but as countdown timers in the object's own fields.** Batton Bone re-aims every 20–23 frames and has a 600-frame chase limit; others count down to their next shot. Intervals are usually a constant `LDA #n / STA $3x`, sometimes plus a little randomness, so **they're easy to patch**. |
 | "behavior is in a stack" | **Not a stack: a state machine**, two or three levels deep (`$01` state → `$02` substate → `$03`). Each state handler chooses the next state by writing `$01`/`$02` directly. There's no queue of pending behaviors; the only "stack" is the CPU's call stack. |
-| "player behavior affects states" | **Yes, through specific checks:** distance to X (wake-up/attack ranges), angle to X (aiming), getting hit (flee/stagger), and a few reads of X's own state (e.g. `$0BCF`, possibly X's charge/weapon **(?)**). Each check is a branch you can retune or redirect. |
+| "player behavior affects states" | **Yes, through specific checks:** distance to X (wake-up/attack ranges), angle to X (aiming), getting hit (flee/stagger), and a few reads of X's own state (e.g. `X_hp` (`$0BCF`), possibly X's charge/weapon **(?)**). Each check is a branch you can retune or redirect. |
 
 ## What's easy to change now
 
 - **HP:** 1 byte, location listed per enemy in `out/enemy_catalogue.txt` (e.g. Batton Bone `0x3A13D`).
 - **Timers and intervals:** the `LDA #n` before `STA $33`/`$37`/`$38`/`$3A`.
 - **Speeds:** the velocity constants (`LDA #$0280 / STA $1C`) and the shared speed tables in bank $86. Note that shared tables affect every enemy that uses them.
-- **Detection ranges:** the index passed in X to `$82:FC48`, or the range table at `$86:E47B` (shared).
+- **Detection ranges:** the index passed in X to `x_in_range` (`$82:FC48`), or the range table at `$86:E47B` (shared).
 - **Behavior variants:** many enemies check sub-id bits, so a different sub-id in the level events can switch behavior without touching code.
 
 ## Harder (needs new code in the expanded ROM's free space)
@@ -122,7 +122,7 @@ Full listing: `out/chill_penguin.asm` (`python3 trace.py 81B516`).
 | 8 | **Ice Breath** | if an ice statue already exists, **do Ice Shot instead**. Otherwise breathe for 60 frames (breath particles = object 0x1A sub 0, sound 0x72), then make two statues (object 0x1A sub 1) at 0x30 and 0x50 px in front, wait 60 + 30 frames |
 | A | **Flinch** (on hit) | hop backwards (x 0x100, y 0x221); a small hop of 20 frames, or a big one of 60 frames when hit by his weakness; then choose an attack as if he had just done Ice Shot |
 
-### How the next attack is chosen (`$81:C019`)
+### How the next attack is chosen (`choose_next_attack` (`$81:C019`))
 `next = table[$86:C45B + current*8 + random(0..15)]`, i.e. one 16-entry row per attack.
 Odds out of 16:
 
@@ -138,9 +138,9 @@ Each row is the previous one rotated, so he rarely repeats an attack and *tends*
 Ice Shot → Slide → Breath → Blizzard → Jump → Ice Shot. Edit these 80 bytes (PC `0x3445B`) to change his pattern.
 
 ### How X affects him
-- **Aiming**: Ice Shot, Slide, Jump and Breath all turn to face X first (`$84:ACA5` (?)). Jump aims its arc at X's X position.
+- **Aiming**: Ice Shot, Slide, Jump and Breath all turn to face X first (`face_x`, `$84:ACA5`, verified). Jump aims its arc at X's X position.
 - **Getting hit**: 70 frames of invulnerability (flashing). He flinches only when flag `$38` is set, Ice Shot and Jump set it as they start. Slide and Breath clear it as they start and set it again when they finish; Blizzard leaves it as it was. He always flinches when hit by his weakness. So mid-slide and mid-breath, normal shots hurt him but don't interrupt him.
-- **Weakness**: `$1F1D` is the id of the projectile that just hit (set by the damage routine `$84:9E15`). 0x0A (Fire Wave) or 0x13 (charged Fire Wave) forces the big flinch and a different hit sound.
+- **Weakness**: `last_hit_projectile` (`$1F1D`) is the id of the projectile that just hit (set by the damage routine `$84:9E15`). 0x0A (Fire Wave) or 0x13 (charged Fire Wave) forces the big flinch and a different hit sound.
 - **Ice statues** block Ice Breath until they're destroyed, so breaking statues changes which attacks he can use.
 - He doesn't react to X's position before choosing; the choice is purely random from the table above.
 
@@ -163,7 +163,7 @@ Ice Shot → Slide → Breath → Blizzard → Jump → Ice Shot. Edit these 80 
 
 ### Note on spawned objects
 The ice shot (0x06), hook (0x12) and breath/statue (0x1A) ids are **not** enemy ids. They're
-created through other allocators (`$82:8358`, `$82:82B9`) into a separate object list
+created through other allocators (`alloc_enemy_shot` (`$82:8358`), `alloc_misc_1628` (`$82:82B9`)) into a separate object list
 (`$1428–$1628`) that has its own dispatch table (not yet located). Enemy id 0x06, for example, is an
 unrelated enemy placed in Sting Chameleon's stage.
 
@@ -206,31 +206,67 @@ Every editable value below is defined in `defs.py` and checked against the stock
 
 | boss | object | code | damage class | weakness (damage table) | weapon with a special reaction | how attacks are picked |
 |---|---|---|---|---|---|---|
-| Launch Octopus | enemy 07 | `$81:C433` | 0C | Rolling Shield | Boomerang Cutter ×3 cuts tentacles | X distance band (+ tentacles cut), 32 entries/row at `$86:C625` |
-| Sting Chameleon | enemy 0A | `$88:853E` | 06 | Boomerang Cutter | Boomerang Cutter → knockback | inline random rolls after each attack |
+| Launch Octopus | enemy 07 | `$81:C433` | 0C | Rolling Shield | Boomerang Cutter ×3 cuts tentacles | X distance band (+ tentacles cut), 32 entries/row at `$86:C625`; **row order close, far, mid** |
+| Sting Chameleon | enemy 0A | `$88:853E` | 06 | Boomerang Cutter | Boomerang Cutter → knockback | inline random rolls after each attack; while cloaked he hops up to 3 times and lashes if X is in tongue reach |
 | Armored Armadillo | enemy 14 | `$83:B144` | 0B | Electric Spark | Electric Spark breaks armour; charged buster into guard → counter | X distance band, 16/row at `$86:C980`; max 2 repeats |
 | Flame Mammoth | enemy 0C | `$87:91A7` | 08 | Storm Tornado | Boomerang Cutter ×3 cuts trunk | X high → stomp; else distance band (+ trunk cut), 16/row at `$86:C843`; max 3 repeats |
-| Storm Eagle | enemy 52 (spawned by type-2 trigger 20) | `$87:D85C` | 07 | Chameleon Sting | — | per-attack weights /32 at `$86:D41B` |
-| Spark Mandrill | enemy 31 | `$88:9BE1` | 0A | Shotgun Ice | Shotgun Ice freezes; charged buster staggers dash | per-attack weights /32 at `$86:CFDB` |
-| Boomer Kuwanger | enemy 05 | `$87:8A7E` | 0D | Homing Torpedo | while teleporting, hittable only with Homing Torpedo selected | two 16/row tables at `$86:C5A3` and `$86:C5C3` |
+| Storm Eagle | enemy 52 (appears during the platform ride; type-2 trigger 20 (?)) | `$87:D85C` | 07 | Chameleon Sting | — | per-attack weights /32 at `$86:D41B` (Gust, Dive, Storm Tornado, Birds) |
+| Spark Mandrill | enemy 31 | `$88:9BE1` | 0A | Shotgun Ice | Shotgun Ice freezes (other hits never interrupt him); charged buster staggers dash | per-attack weights /32 at `$86:CFDB` (Electric Spark, Ceiling drop, Dash punch, Jump at X) |
+| Boomer Kuwanger | enemy 05 | `$87:8A7E` | 0D | Homing Torpedo | while teleporting, hittable only with Homing Torpedo selected; Homing Torpedo hits flinch longer (24 vs 16 frames) | after a dash: 16/row at `$86:C5A3` (row = dash ≥ 9 frames); after a teleport: 16/row at `$86:C5C3` (row = X within 128 px); Dead Lift whenever X is within 32 px in front |
 | Chill Penguin | enemy 02 | `$81:B516` | 09 | Fire Wave | Fire Wave → big flinch | previous attack, 16/row at `$86:C45B` |
 
 Common to all eight: the HP bar fills to 32 in the intro (`CMP #$20`), there are 60 frames of
 invulnerability after a hit (70 for Chill Penguin), and damage class 5 (no damage) applies while flashing.
 
-Fortress bosses (found by placement, confirmed by sprite; attacks not traced yet): object 63 =
-Bosspider (end of Sigma 1), 5D = eye orb, likely Rangda Bangda (Sigma 2), 62 = dragon-headed tank,
-likely D-Rex (Sigma 3), 65 = Sigma (Sigma 4, two HP fills), 68 = Sigma 4 helper. Vile is object 69,
-never placed in a stage (spawned by a script). The Mavericks' rematches reuse the same objects.
+Fortress bosses (details in `defs.py`):
+
+- **Bosspider** (object 63, Sigma 1): rides a web drawn into the stage's collision (values $14/$15/$16 =
+  turn right / go down / turn left), shows a random path, walks it, climbs back. Hurtable only for 24 frames
+  at the bottom (damage class $0A; class 0 = deflect elsewhere (?)). Babies (enemy shot 0x2B) when X is level.
+- **Rangda Bangda** (object 5D, Sigma 2): a controller: two eyes (5E), nose (5F), closing walls (60); the bar
+  is the sum of the parts' HP. Parts report through `part1-3_status` ($1F3F-$1F41, bit 7 = destroyed).
+- **D-Rex (?)** (object 62, Sigma 3): drawn on a background layer, a platform X can ride (`carry_x`); rams
+  the walls (quake + stun) and crushes a pinned X for 6. Works with a part (61) through the same status bytes.
+- **Sigma** (object 65, Sigma 4): the whole finale in one object: sends Velguarder (26 (?)), fights as Sigma
+  (dash/slash, jump dash + wall kick, two shots, guard), then Wolf Sigma (hands 6B, head shots 0x31/0x32).
+
+68 = Sigma 4 helper. Vile is object 69, never placed in a stage (spawned by a script). The Mavericks'
+rematches reuse the same objects.
+
+### Boomer Kuwanger compared with Chill Penguin
+
+Both are built on the same skeleton; the differences are in the attacks.
+
+| part | Chill Penguin (`$81:B516`) | Boomer Kuwanger (`$87:8A7E`) | Storm Eagle (`$87:D85C`, verified) |
+|---|---|---|---|
+| states | init / intro / fight / death | same | same |
+| init | `boss_already_beaten` → despawn; `x_freeze_for_boss`; 60 frames; jingle $2E; `obj_start` | identical | same but no `x_freeze_for_boss`: X is held by the platform ride (X step `$46`) |
+| entrance | falls with gravity until he lands, then spawns the ceiling hook | beam-in: 16 px steps right, down, right (no gravity) | appears at screen_left + 208, top of the screen, falls at a steady vy −256 until he lands |
+| HP fill | `hud_boss = self`, +1 every 2 frames to 32 with `play_sound_centered`, bit 7 set to redraw | identical | identical |
+| end of intro | boss music $1E, then `x_unfreeze` straight away | waits 30 frames, then `x_unfreeze`, then boss music | sets the arena borders, boss music $1E, waits 30 frames (plus ~7 while the music loads), then `x_unfreeze` |
+| every fight frame | restore `palette_bits`; run the attack; damage class 9 (5 while invulnerable, 0 while sliding) | restore `palette_bits`; run the attack; damage class 13 (5 while invulnerable) | restore `palette_bits`; run the attack; `wing_sounds`; damage class 7 (5 while invulnerable) |
+| getting hit | 70 frames invulnerable; flinches only if `can_flinch`, or always to his weakness | 60 frames invulnerable; **always** flinches and remembers the attack (`resume_attack`); can't be hit while teleporting unless X has Homing Torpedo selected | 60 frames invulnerable, sound $13; never flinches |
+| weakness reaction | Fire Wave → big flinch + sound $4A | Homing Torpedo → 24-frame flinch instead of 16 | none (Chameleon Sting only does more damage) |
+| hurting X | `hurt_x_on_contact` every frame | only while visible and not teleporting | `hurt_x_on_contact` every frame; Gust and tornado push X instead of hurting |
+| HP 0 | checked only on a hit | checked every frame | checked only on a hit |
+| at HP 0 | state 6, `boss_defeated = 1`, `X_hurt_lock` (`$0BD8`) = 1, death pose | identical | identical (death pose 10), plus `boss_signal` bit 0 |
+| death | `boss_defeated_sequence`, then `obj_despawn` (fortress rematch: music $1B) | identical (music $1A); also keeps animating unless `freeze_enemies` | identical |
+| choosing an attack | one table, row = the attack he just did (`choose_next_attack`) | two tables: after a dash (row = dash length), after a teleport (row = X distance); Dead Lift by range, not by table | one weight table, row = the attack he just did (`choose_next_attack`, `$87:DE1F`) |
+| low HP | no change | below 17 HP a hit can start a 6–13 teleport streak | no change |
+
+Logically they match: same intro hand-off, same HP/HUD protocol, same hit → invulnerability → flash loop, same
+`x_dead` bookkeeping and the same death hand-off. Boomer adds the "only Homing Torpedo while teleporting" gate,
+a range-triggered grab that bypasses the tables, and an HP-dependent mode; Chill Penguin instead gates flinching
+per attack. The one ordering difference is the end of the intro (Boomer waits 30 frames before freeing X).
 
 ### Object lists and allocators
 | allocator | RAM list | dispatch table | contents |
 |---|---|---|---|
-| `$82:8321` | `$0E68–$1228` | `$80:F8DD` | enemies (event type 3), Storm Eagle, Octopus piranhas |
-| `$82:833E` | `$1228–$1428` | `$80:F68F` | X's projectiles (30 ids) |
-| `$82:8358` | `$1428–$1628` | ? | enemy projectiles (ice shots, oil, fireballs…) |
-| `$82:82B9` | `$1628–` | ? | misc (Chill Penguin's hook) |
-| `$82:82D3` | `$1928–` | ? | effects |
+| `alloc_enemy` (`$82:8321`) | `$0E68–$1228` | `$80:F8DD` | enemies (event type 3), Storm Eagle, Octopus piranhas |
+| `alloc_x_shot` (`$82:833E`) | `$1228–$1428` | `$80:F68F` | X's projectiles (30 ids) |
+| `alloc_enemy_shot` (`$82:8358`) | `$1428–$1628` | ? | enemy projectiles (ice shots, oil, fireballs…) |
+| `alloc_misc_1628` (`$82:82B9`) | `$1628–` | ? | misc (Chill Penguin's hook) |
+| `alloc_effect_1928` (`$82:82D3`) | `$1928–` | ? | effects |
 Event type 2 (triggers) dispatch through `$80:F59A` (35 ids).
 
 ## Enemy sprites (`sprites.py`)

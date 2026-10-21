@@ -31,6 +31,7 @@ from render_level import render
 from trace import listing
 from lift import lift
 from decomp import decompile_with_map
+from testwarp import make_test_rom
 import re
 
 HERE = Path(__file__).parent
@@ -320,16 +321,35 @@ class App(tk.Tk):
         self.set_status(f"Emulator: {p}")
 
     def save_and_run(self):
-        emu = self.emulator_path()
-        if emu is None:
-            messagebox.showinfo("No emulator", "Choose an emulator first (Emulator… button).")
-            self.choose_emulator()
-            emu = self.emulator_path()
-            if emu is None:
-                return
         if not self._guard(self.project):
             return
-        self.save()
+        if self.need_emulator():
+            self.save()
+            if self.launch(self.project):
+                self.set_status(f"Saved {self.project.name} and launched {self.emulator_path().name}")
+
+    def run_test(self, level, x, y=None):
+        """Build work/test.sfc from the ROM as edited (no save needed) starting at (x, y) and run it."""
+        if not self.need_emulator():
+            return
+        try:
+            t = make_test_rom(self.g, level, x, y)
+        except ValueError as e:
+            messagebox.showerror("Can't build test ROM", str(e))
+            return
+        out = HERE / "work" / "test.sfc"
+        save_rom(t, out)
+        if self.launch(out):
+            cp = t.checkpoint(level, 0)
+            self.set_status(f"Testing {LEVEL_NAMES[level]} from ({cp['chX']}, {cp['chY']}) — {out.name}")
+
+    def need_emulator(self):
+        if self.emulator_path() is None:
+            messagebox.showinfo("No emulator", "Choose an emulator first (Emulator… button).")
+            self.choose_emulator()
+        return self.emulator_path() is not None
+
+    def launch(self, rom: Path):
         if self.emu_proc and self.emu_proc.poll() is None:     # restart our previous emulator window
             self.emu_proc.terminate()
             try:
@@ -337,12 +357,12 @@ class App(tk.Tk):
             except subprocess.TimeoutExpired:
                 self.emu_proc.kill()
         try:
-            self.emu_proc = subprocess.Popen([str(emu), str(self.project.resolve())],
+            self.emu_proc = subprocess.Popen([str(self.emulator_path()), str(rom.resolve())],
                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as e:
             messagebox.showerror("Can't start emulator", str(e))
-            return
-        self.set_status(f"Saved {self.project.name} and launched {emu.name}")
+            return False
+        return True
 
     def expand_rom(self):
         """Grow the project ROM to 2.5 MB (room for more events, layouts, scenes)."""
@@ -912,6 +932,8 @@ class LevelTab(ttk.Frame):
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", lambda e: self.canvas.scan_dragto(e.x, e.y, gain=1))
         self.canvas.bind("<Double-Button-1>", self.on_double)
+        for seq in ("<Button-2>", "<Button-3>") if MAC else ("<Button-3>",):   # right-click
+            self.canvas.bind(seq, self.on_right)
         pan.add(cf, weight=3)
 
         side_nb = ttk.Notebook(pan)
@@ -1517,6 +1539,17 @@ class LevelTab(ttk.Frame):
         self.ed["x"].set(str(max(0, min(0x1FFF, x))))
         self.ed["y"].set(str(max(0, min(0xFFFF, y))))
         self.apply()
+
+    def on_right(self, ev):
+        k = self.scale()
+        x = int(self.canvas.canvasx(ev.x) / k)
+        y = int(self.canvas.canvasy(ev.y) / k)
+        L = self.level.current()
+        m = tk.Menu(self, tearoff=0)
+        m.add_command(label=f"Test here ({x}, {y})", command=lambda: self.app.run_test(L, x, y))
+        m.add_command(label=f"Test here, landing on the floor below x={x}",
+                      command=lambda: self.app.run_test(L, x))
+        m.tk_popup(ev.x_root, ev.y_root)
 
     def focus_event(self, e, scroll=True):
         k = self.scale()

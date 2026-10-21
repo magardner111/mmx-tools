@@ -45,9 +45,14 @@ def check(g: MMX1, p: Param):
     if p.prev is not None and g.rom[o - 1] != p.prev:
         raise ParamError(f"{p.key}: expected opcode {p.prev:02X} before {p.addr:06X}, "
                          f"found {g.rom[o - 1]:02X} - not the ROM/version these defs are for")
-    for extra in ([p.mirror] if p.mirror is not None else []) + list(p.copies):
-        if p.prev is not None and g.rom[snes2pc(extra) - 1] != p.prev:
-            raise ParamError(f"{p.key}: opcode mismatch at {extra:06X}")
+    for extra in [(p.mirror, p.prev)] * (p.mirror is not None) + [_copy(p, c) for c in p.copies]:
+        if extra[1] is not None and g.rom[snes2pc(extra[0]) - 1] != extra[1]:
+            raise ParamError(f"{p.key}: opcode mismatch at {extra[0]:06X}")
+
+
+def _copy(p: Param, c):
+    """A copy is an address (same opcode as the main operand) or (address, its own opcode)."""
+    return c if isinstance(c, tuple) else (c, p.prev)
 
 
 def get(g: MMX1, p: Param) -> int:
@@ -69,7 +74,7 @@ def put(g: MMX1, p: Param, v: int):
     if p.mirror is not None:
         struct.pack_into("<H", g.rom, snes2pc(p.mirror), (-v) & 0xFFFF)
     for c in p.copies:
-        oc = snes2pc(c)
+        oc = snes2pc(_copy(p, c)[0])
         g.rom[oc:oc + _size(p)] = (v & (0xFF if p.kind == "u8" else 0xFFFF)).to_bytes(_size(p), "little")
 
 

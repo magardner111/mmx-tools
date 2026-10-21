@@ -111,7 +111,9 @@ DP = {
     "$05": "x.lo?", "$27": "HP", "$28": "dmg/contact?",
 }
 GLOBAL = {
-    "$0BAD": "X.xpos", "$0BB0": "X.ypos", "$0B9C": "?",
+    "$0BAD": "X.xpos", "$0BB0": "X.ypos", "$0B9C": "?", "$0BAA": "X.step",
+    "$1F7A": "level", "$1F86": "weapon flags (bit 6 = stage boss beaten)", "$1E4D": "screen left",
+    "$1F0C": "boss defeated", "$1F0E": "HUD boss", "$1F10": "HUD boss bar state",
 }
 
 
