@@ -9,8 +9,10 @@ MegaEdX and the game's own code; see the docs below for how.
 - Your own *Mega Man X (USA) (Rev 1)* ROM, placed **next to this folder** as
   `../Mega Man X (USA) (Rev 1).sfc`. No ROM data is included in this repository.
   `work/` and `out/` are created locally and ignored by git.
-- Optional: an emulator for **Save & Run**. MMX Lab looks for Mesen 2 at
-  `../emulator/Mesen.app`, or you can pick one with **Emulator…**.
+- Optional: an emulator for **Save & Run**. MMX Lab looks in `../emulator/` for Snes9x (`snes9x-gtk` or
+  `snes9x.exe`), then Mesen 2 (`Mesen.app`, `Mesen.exe`, `Mesen` or `Mesen.AppImage`), or you can pick one
+  with **Emulator…**. On Linux/Raspberry Pi, build Snes9x's GTK port from
+  [snes9xgit/snes9x](https://github.com/snes9xgit/snes9x) (`gtk/`, CMake) and link the binary there.
 - `expand.py` and `reference/` are derived from MegaEdX (GPLv3, Xeeynamo / RedGuyyyy / rbrummett).
 
 ## Start here
@@ -27,7 +29,9 @@ python3 ui.py some/other.sfc
 | **Levels** | Stage map with camera-lock / collision overlays and an **editable event list**: change type, object, sub-id, X/Y; add, delete, revert; double-click the map to move the selected event. Click a marker to select it |
 | **Code** | Any routine as Assembly, decompiled C, literal C, or Assembly + C side by side (click a line to find its counterpart) |
 
-Edits are made in memory; **Save** (⌘S) writes the project ROM and fixes the checksum.
+Edits are made in memory; **Save** (⌘S on macOS, Ctrl+S elsewhere) writes the project ROM and fixes the checksum.
+**Text size** (toolbar, or Ctrl/⌘ `+` / `-`) scales all text, from 70% to 150%, and is remembered. Panels that
+don't fit the window scroll.
 **Expand ROM…** (toolbar) grows the project to 2.5 MB so stages can hold more events (2 KB each instead of the stock size).
 The original ROM can't be overwritten.
 

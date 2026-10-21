@@ -6,6 +6,8 @@ MMX Lab: a small Tk editor for the Mega Man X1 data we've decoded.
 Works on a project ROM (default work/hack.sfc, copied from the stock ROM the
 first time). The stock ROM is never written.
 """
+import base64
+import io
 import json
 import shutil
 import subprocess
@@ -14,7 +16,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
-from PIL import Image, ImageTk
+from PIL import Image
+try:
+    from PIL import ImageTk
+except ImportError:     # Debian/Raspberry Pi OS ship ImageTk separately (python3-pil.imagetk)
+    ImageTk = None
 from sprites import SpriteRenderer
 import gfxsets as G
 
@@ -30,7 +36,13 @@ import re
 HERE = Path(__file__).parent
 DEFAULT_PROJECT = HERE / "work" / "hack.sfc"
 SETTINGS = HERE / "mmxlab.json"
-DEFAULT_EMULATOR = HERE.parent / "emulator" / "Mesen.app" / "Contents" / "MacOS" / "Mesen"
+MAC = sys.platform == "darwin"
+WINDOWS = sys.platform.startswith("win")
+EMU_DIR = HERE.parent / "emulator"
+EMULATOR_CANDIDATES = [EMU_DIR / "snes9x-gtk", EMU_DIR / "snes9x.exe",
+                       EMU_DIR / "Mesen.app" / "Contents" / "MacOS" / "Mesen", EMU_DIR / "Mesen.exe",
+                       EMU_DIR / "Mesen", EMU_DIR / "Mesen.AppImage"]
+DEFAULT_EMULATOR = next((p for p in EMULATOR_CANDIDATES if p.is_file()), None)
 
 
 def load_settings():
@@ -42,7 +54,107 @@ def load_settings():
 
 def save_settings(data):
     SETTINGS.write_text(json.dumps(data, indent=2))
-MONO = ("Menlo", 11)
+MONO_FAMILY = "Menlo" if MAC else "Consolas" if WINDOWS else "DejaVu Sans Mono"
+MOD = "Command" if MAC else "Control"     # modifier for keyboard shortcuts
+
+# Named fonts, all resized together by the Text size setting: name -> (family, size at 100%, weight).
+# A family of None means the normal UI font.
+FONTS = {"Title": (None, 18, "bold"), "Heading": (None, 13, "bold"), "Subheading": (None, 12, "bold"),
+         "Bold": (None, 11, "bold"), "SmallBold": (None, 10, "bold"), "Small": (None, 9, "normal"),
+         "Mono": (MONO_FAMILY, 11, "normal"), "MonoBold": (MONO_FAMILY, 11, "bold"),
+         "MonoSmall": (MONO_FAMILY, 10, "normal"), "MonoTiny": (MONO_FAMILY, 9, "normal")}
+TK_FONTS = ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont",
+            "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont")
+SCALES = [70, 80, 90, 100, 110, 125, 150]
+UI_SCALE = 1.0      # current Text size; px() scales pixel sizes (wrap widths, column widths) to match
+
+
+def px(n):
+    return int(n * UI_SCALE)
+
+
+def photo(img):
+    """A Tk image from a PIL image, with or without PIL's ImageTk module."""
+    if ImageTk is not None:
+        return ImageTk.PhotoImage(img)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return tk.PhotoImage(data=base64.b64encode(buf.getvalue()))
+
+
+_WHEEL_TARGETS = {}     # canvas -> active() for every canvas that scrolls with the mouse wheel
+
+
+def bind_wheel(widget, canvas, active):
+    """Scroll `canvas` with the mouse wheel (Shift: sideways) while the pointer is over it and `active()`
+    is true, on every platform. Widgets that scroll themselves (text, lists, tables) keep their own wheel."""
+    _WHEEL_TARGETS[canvas] = active
+    if len(_WHEEL_TARGETS) > 1:
+        return
+
+    def wheel(e):
+        w = e.widget.winfo_containing(e.x_root, e.y_root)
+        if w is None or isinstance(w, (tk.Text, tk.Listbox, ttk.Treeview)):
+            return
+        while w is not None and w not in _WHEEL_TARGETS:
+            w = w.master
+        if w is None or not w.winfo_exists() or not _WHEEL_TARGETS[w]():
+            return
+        if e.num == 4 or e.num == 5:                    # X11 (Linux) sends buttons 4/5
+            step = -1 if e.num == 4 else 1
+        elif WINDOWS:                                   # Windows: multiples of 120
+            step = -e.delta // 120
+        else:                                           # macOS: small deltas
+            step = -e.delta
+        (w.xview_scroll if e.state & 1 else w.yview_scroll)(step, "units")
+    for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+        widget.bind_all(seq, wheel)
+
+
+class ScrollFrame(ttk.Frame):
+    """A frame whose `body` scrolls in either direction once it no longer fits; while it fits, `body`
+    is stretched to fill the visible area. Scrollbars appear only when needed."""
+    def __init__(self, parent, track_width=False, **kw):
+        super().__init__(parent, **kw)
+        self.track_width = track_width      # ask for the body's full width rather than a default
+        bg = ttk.Style(self).lookup("TFrame", "background") or None
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, background=bg)
+        self.vs = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.hs = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=self.vs.set, xscrollcommand=self.hs.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.body = ttk.Frame(self.canvas)
+        self.item = self.canvas.create_window(0, 0, window=self.body, anchor="nw")
+        self.canvas.bind("<Configure>", lambda e: self.fit())
+        bind_wheel(self.canvas, self.canvas, self.winfo_ismapped)
+        self._last = None
+        self._poll()
+
+    def _poll(self):
+        # the body's requested size changes without any event, so check for it a few times a second
+        if self.winfo_ismapped():
+            self.fit()
+        self.after(250, self._poll)
+
+    def fit(self):
+        need = (self.body.winfo_reqwidth(), self.body.winfo_reqheight())
+        have = (self.canvas.winfo_width(), self.canvas.winfo_height())
+        if (need, have) == self._last:
+            return
+        self._last = (need, have)
+        if self.track_width and int(self.canvas.cget("width")) != need[0]:
+            self.canvas.configure(width=need[0])    # asks for the body's width; a squeezed pane still scrolls
+        w, h = max(need[0], have[0]), max(need[1], have[1])
+        self.canvas.itemconfigure(self.item, width=w, height=h)
+        self.canvas.configure(scrollregion=(0, 0, w, h))
+        for bar, n, v, place in ((self.vs, need[1], have[1], dict(row=0, column=1, sticky="ns")),
+                                 (self.hs, need[0], have[0], dict(row=1, column=0, sticky="ew"))):
+            if n > v + 1:
+                bar.grid(**place)
+            elif n < v - 20 or (bar is self.hs and self.track_width and n <= v):
+                bar.grid_remove()   # (the margin stops a scrollbar appearing/disappearing from flip-flopping)
 EVENT_TYPES = {0: "item/door", 1: "script", 2: "trigger", 3: "enemy"}
 
 
@@ -50,17 +162,17 @@ class App(tk.Tk):
     def __init__(self, project: Path):
         super().__init__()
         ttk.Style(self).configure("Mod.TEntry", foreground="#b00020")
-        self.geometry("1280x820")
-        self.minsize(1000, 650)
+        self.init_fonts()
+        self.fit_to_screen()
         self.project = None
         self.g = None
         self.dirty = False
 
         self._build_toolbar()
+        self.status = ttk.Label(self, anchor="w", padding=(8, 2))
+        self.status.pack(fill="x", side="bottom")   # packed before the tabs so a short window can't hide it
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True, padx=6, pady=(0, 6))
-        self.status = ttk.Label(self, anchor="w", padding=(8, 2))
-        self.status.pack(fill="x", side="bottom")
 
         self.boss_tab = BossTab(self.nb, self)
         self.enemy_tab = EnemyTab(self.nb, self)
@@ -71,10 +183,84 @@ class App(tk.Tk):
             self.nb.add(tab, text=name)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.bind_all("<Command-s>", lambda e: self.save())
-        self.bind_all("<Command-r>", lambda e: self.save_and_run())
+        self.bind_all(f"<{MOD}-s>", lambda e: self.save())
+        self.bind_all(f"<{MOD}-r>", lambda e: self.save_and_run())
+        for seq, d in (("equal", 1), ("plus", 1), ("minus", -1)):
+            self.bind_all(f"<{MOD}-{seq}>", lambda e, d=d: self.step_scale(d))
         self.emu_proc = None
         self.open_project(project)
+
+    # --- window size and text size ----------------------------------------------------------
+    def fit_to_screen(self):
+        """Open at 1280x820, or smaller so the whole window (title bar and taskbar included) is on screen."""
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = min(1280, sw - 40), min(820, sh - 100)
+        self.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h - 60) // 2)}")
+        self.minsize(min(640, w), min(420, h))
+
+    def init_fonts(self):
+        import tkinter.font as tkfont
+        self.base_sizes = {}
+        for name in TK_FONTS:
+            try:
+                self.base_sizes[name] = tkfont.nametofont(name).cget("size")
+            except tk.TclError:
+                pass
+        ui_family = tkfont.nametofont("TkDefaultFont").cget("family")
+        self.fonts = {}     # Tk deletes a named font when its Python object goes away
+        for name, (family, size, weight) in FONTS.items():
+            self.fonts[name] = tkfont.Font(self, name=name, family=family or ui_family, size=size, weight=weight)
+            self.base_sizes[name] = size
+        self.scale = 100
+        self.apply_scale(load_settings().get("text_size", 100))
+
+    def apply_scale(self, pct):
+        """Resize every font, then the pixel sizes tied to text (wrap widths, table columns and rows)."""
+        import tkinter.font as tkfont
+        global UI_SCALE
+        pct = min(SCALES, key=lambda s: abs(s - pct))
+        ratio = pct / self.scale
+        if not hasattr(self, "base_px"):
+            self.base_px = {}   # (widget, setting) -> its size at 100%, so repeated changes don't drift
+        for name, size in self.base_sizes.items():
+            new = round(abs(size) * pct / 100)
+            tkfont.nametofont(name).configure(size=max(6, new) * (-1 if size < 0 else 1))
+        line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        ttk.Style(self).configure("Treeview", rowheight=line + 4)
+        old, self.scale, UI_SCALE = UI_SCALE, pct, pct / 100
+        if ratio != 1:
+            self._rescale_widgets(self, old)
+        if hasattr(self, "scale_box"):
+            self.scale_box.set(f"{pct}%")
+
+    def _rescale_widgets(self, w, old):
+        def base(key, current):
+            return self.base_px.setdefault((str(w), key), current / old)
+        if isinstance(w, ttk.Treeview):
+            for c in w["columns"]:
+                w.column(c, width=px(base(c, w.column(c, "width"))),
+                         minwidth=px(base(c + "/min", w.column(c, "minwidth"))))
+        else:
+            try:
+                wrap = int(str(w.cget("wraplength")) or 0)
+                if wrap > 0:
+                    w.configure(wraplength=px(base("wrap", wrap)))
+            except (tk.TclError, ValueError):
+                pass
+        for child in w.winfo_children():
+            self._rescale_widgets(child, old)
+
+    def set_scale(self, pct):
+        self.apply_scale(pct)
+        data = load_settings()
+        data["text_size"] = self.scale
+        save_settings(data)
+        self.set_status(f"Text size {self.scale}%")
+
+    def step_scale(self, d):
+        i = SCALES.index(self.scale) + d
+        if 0 <= i < len(SCALES):
+            self.set_scale(SCALES[i])
 
     # --- project -------------------------------------------------------------
     def _build_toolbar(self):
@@ -89,6 +275,12 @@ class App(tk.Tk):
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Button(bar, text="▶ Save & Run", command=self.save_and_run).pack(side="left")
         ttk.Button(bar, text="Emulator…", command=self.choose_emulator).pack(side="left", padx=4)
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Label(bar, text="Text size").pack(side="left")
+        self.scale_box = ttk.Combobox(bar, state="readonly", width=5, values=[f"{s}%" for s in SCALES])
+        self.scale_box.set(f"{self.scale}%")
+        self.scale_box.pack(side="left", padx=4)
+        self.scale_box.bind("<<ComboboxSelected>>", lambda e: self.set_scale(int(self.scale_box.get()[:-1])))
         self.path_label = ttk.Label(bar, foreground="#555")
         self.path_label.pack(side="left", padx=12)
 
@@ -111,11 +303,11 @@ class App(tk.Tk):
         p = load_settings().get("emulator")
         if p and Path(p).exists():
             return Path(p)
-        return DEFAULT_EMULATOR if DEFAULT_EMULATOR.exists() else None
+        return DEFAULT_EMULATOR
 
     def choose_emulator(self):
         f = filedialog.askopenfilename(title="Choose an emulator (app or executable)",
-                                       initialdir=str(HERE.parent / "emulator"))
+                                       initialdir=str(EMU_DIR if EMU_DIR.is_dir() else HERE.parent))
         if not f:
             return
         p = Path(f)
@@ -231,7 +423,7 @@ class BossTab(ttk.Frame):
         self.app = app
         left = ttk.Frame(self)
         left.pack(side="left", fill="y")
-        ttk.Label(left, text="Bosses", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(left, text="Bosses", font="Heading").pack(anchor="w")
         self.boss_list = tk.Listbox(left, width=22, exportselection=False)
         self.boss_list.pack(fill="y", expand=True, pady=4)
         for b in BOSSES.values():
@@ -239,18 +431,9 @@ class BossTab(ttk.Frame):
         self.boss_list.bind("<<ListboxSelect>>", lambda e: self.show_boss())
 
         # scrollable right side
-        outer = ttk.Frame(self)
+        outer = ScrollFrame(self)
         outer.pack(side="left", fill="both", expand=True, padx=(10, 0))
-        canvas = tk.Canvas(outer, highlightthickness=0)
-        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        self.body = ttk.Frame(canvas)
-        self.body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.body, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-e.delta, "units")
-                        if self.winfo_ismapped() else None)
+        self.body = outer.body
         self.boss = None
 
     def refresh(self):
@@ -267,40 +450,40 @@ class BossTab(ttk.Frame):
             w.destroy()
         b, g = self.boss, self.app.g
 
-        ttk.Label(self.body, text=b.name, font=("", 18, "bold")).grid(row=0, column=0, columnspan=6, sticky="w")
+        ttk.Label(self.body, text=b.name, font="Title").grid(row=0, column=0, columnspan=6, sticky="w")
         info = f"object {b.object_id:02X} · stage: {LEVEL_NAMES[b.level]} · code ${b.routine:06X}"
         if b.damage_class is not None:
             info += f" · damage class {b.damage_class}"
         ttk.Label(self.body, text=info, foreground="#666").grid(row=1, column=0, columnspan=5, sticky="w")
-        ttk.Label(self.body, text=b.summary, wraplength=820, justify="left").grid(
+        ttk.Label(self.body, text=b.summary, wraplength=px(820), justify="left").grid(
             row=2, column=0, columnspan=6, sticky="w", pady=(6, 10))
         ttk.Button(self.body, text="View code", command=lambda: self.app.code_tab.show(b.routine)).grid(
             row=1, column=5, sticky="e")
 
         r = 3
         if b.weakness:
-            ttk.Label(self.body, text=f"Weakness: {b.weakness}", font=("", 12, "bold")).grid(
+            ttk.Label(self.body, text=f"Weakness: {b.weakness}", font="Subheading").grid(
                 row=r, column=0, columnspan=6, sticky="w", pady=(0, 6))
             r += 1
         for note in b.notes:
-            ttk.Label(self.body, text="• " + note, foreground="#555", wraplength=820, justify="left").grid(
+            ttk.Label(self.body, text="• " + note, foreground="#555", wraplength=px(820), justify="left").grid(
                 row=r, column=0, columnspan=6, sticky="w")
             r += 1
 
         # attacks
         if b.attacks_doc:
-            ttk.Label(self.body, text="Attacks", font=("", 13, "bold")).grid(row=r, column=0, sticky="w")
+            ttk.Label(self.body, text="Attacks", font="Heading").grid(row=r, column=0, sticky="w")
             r += 1
             for name, doc in b.attacks_doc.items():
-                ttk.Label(self.body, text=name, font=("", 11, "bold")).grid(row=r, column=0, sticky="nw", padx=(0, 8))
-                ttk.Label(self.body, text=doc, wraplength=700, justify="left").grid(
+                ttk.Label(self.body, text=name, font="Bold").grid(row=r, column=0, sticky="nw", padx=(0, 8))
+                ttk.Label(self.body, text=doc, wraplength=px(700), justify="left").grid(
                     row=r, column=1, columnspan=5, sticky="w")
                 r += 1
 
         # parameters
         ttk.Separator(self.body).grid(row=r, column=0, columnspan=6, sticky="ew", pady=10)
         r += 1
-        ttk.Label(self.body, text="Parameters", font=("", 13, "bold")).grid(row=r, column=0, sticky="w")
+        ttk.Label(self.body, text="Parameters", font="Heading").grid(row=r, column=0, sticky="w")
         r += 1
         for c, h in enumerate(["Setting", "Value", "", "Meaning", "Stock", ""]):
             ttk.Label(self.body, text=h, foreground="#666").grid(row=r, column=c, sticky="w", padx=4)
@@ -344,21 +527,21 @@ class BossTab(ttk.Frame):
         for ti, t in enumerate(b.attack_tables):
             ttk.Separator(self.body).grid(row=r, column=0, columnspan=6, sticky="ew", pady=10)
             r += 1
-            ttk.Label(self.body, text=t.title, font=("", 13, "bold")).grid(row=r, column=0, sticky="w")
+            ttk.Label(self.body, text=t.title, font="Heading").grid(row=r, column=0, sticky="w")
             ttk.Label(self.body, text=f"{t.desc} Each row must total {t.total}.", foreground="#666",
-                      wraplength=700, justify="left").grid(row=r, column=1, columnspan=5, sticky="w")
+                      wraplength=px(700), justify="left").grid(row=r, column=1, columnspan=5, sticky="w")
             r += 1
             grid = ttk.Frame(self.body)
             grid.grid(row=r, column=0, columnspan=6, sticky="w", pady=4)
             names = list(t.attacks.values())
             ttk.Label(grid, text="row ↓   next attack →", foreground="#666").grid(row=0, column=0, padx=4)
             for c, n in enumerate(names):
-                ttk.Label(grid, text=n, font=("", 10, "bold")).grid(row=0, column=c + 1, padx=6)
+                ttk.Label(grid, text=n, font="SmallBold").grid(row=0, column=c + 1, padx=6)
             ttk.Label(grid, text="total").grid(row=0, column=len(names) + 1, padx=6)
             weights = P.table_weights(g, t)
             vars_, totals = {}, {}
             for i, label in enumerate(t.rows):
-                ttk.Label(grid, text=label, font=("", 10, "bold")).grid(row=i + 1, column=0, sticky="w", padx=4)
+                ttk.Label(grid, text=label, font="SmallBold").grid(row=i + 1, column=0, sticky="w", padx=4)
                 vars_[label] = {}
                 for c, n in enumerate(names):
                     var = tk.IntVar(value=weights[label].get(n, 0))
@@ -387,11 +570,11 @@ class BossTab(ttk.Frame):
         b, g = self.boss, self.app.g
         ttk.Separator(self.body).grid(row=r, column=0, columnspan=6, sticky="ew", pady=10)
         r += 1
-        ttk.Label(self.body, text="Damage taken", font=("", 13, "bold")).grid(row=r, column=0, sticky="w")
+        ttk.Label(self.body, text="Damage taken", font="Heading").grid(row=r, column=0, sticky="w")
         note = f"HP removed per hit, by weapon (damage class {b.damage_class}, 0–127)."
         if b.damage_shared_with:
             note += f" Shared with {b.damage_shared_with}: edits affect it too."
-        ttk.Label(self.body, text=note, foreground="#666", wraplength=700).grid(
+        ttk.Label(self.body, text=note, foreground="#666", wraplength=px(700)).grid(
             row=r, column=1, columnspan=5, sticky="w")
         r += 1
         grid = ttk.Frame(self.body)
@@ -543,28 +726,37 @@ class EnemyTab(ttk.Frame):
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, pady=6)
-        self.tree = ttk.Treeview(body, columns=self.COLS, show="headings", selectmode="browse")
+        tf = ttk.Frame(body)
+        self.tree = ttk.Treeview(tf, columns=self.COLS, show="headings", selectmode="browse")
         widths = dict(id=50, name=230, hp=60, states=60, routine=90, levels=420)
         for c in self.COLS:
             self.tree.heading(c, text=c.upper() if c in ("id", "hp") else c.title(),
                               command=lambda c=c: self.sort_by(c))
-            self.tree.column(c, width=widths[c], anchor="w" if c in ("name", "levels") else "center")
-        sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="left", fill="y")
+            # columns keep a usable width; a narrow window scrolls sideways instead of squashing them
+            self.tree.column(c, width=px(widths[c]), minwidth=px(min(widths[c], 200)),
+                             anchor="w" if c in ("name", "levels") else "center")
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        hs = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=sb.set, xscrollcommand=hs.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        hs.grid(row=1, column=0, sticky="ew")
+        tf.rowconfigure(0, weight=1)
+        tf.columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", lambda e: self.edit_selected())
 
-        side = ttk.Frame(body, padding=(12, 0))
-        side.pack(side="left", fill="y")
-        self.detail = ttk.Label(side, text="", justify="left", wraplength=260)
+        side_scroll = ScrollFrame(body, track_width=True, padding=(12, 0, 0, 0))
+        side_scroll.pack(side="right", fill="y")      # packed first so the wide table can't push it off screen
+        tf.pack(side="left", fill="both", expand=True)
+        side = side_scroll.body
+        self.detail = ttk.Label(side, text="", justify="left", wraplength=px(260))
         self.detail.pack(anchor="w")
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.show_detail())
         ttk.Button(side, text="Edit…", command=self.edit_selected).pack(anchor="w", pady=(10, 2))
         ttk.Button(side, text="View code", command=self.view_code).pack(anchor="w", pady=2)
         self.sprite_label = ttk.Label(side)
         self.sprite_label.pack(anchor="w", pady=(12, 0))
-        self.sprite_note = ttk.Label(side, foreground="#888", wraplength=260, justify="left")
+        self.sprite_note = ttk.Label(side, foreground="#888", wraplength=px(260), justify="left")
         self.sprite_note.pack(anchor="w")
         self.sprite_photo = None
         self.sprites = None
@@ -632,7 +824,7 @@ class EnemyTab(ttk.Frame):
         img.thumbnail((260, 260))
         bg = Image.new("RGBA", (img.width + 16, img.height + 16), (40, 40, 48, 255))
         bg.alpha_composite(img, (8, 8))
-        self.sprite_photo = ImageTk.PhotoImage(bg)
+        self.sprite_photo = photo(bg)
         self.sprite_label.config(image=self.sprite_photo)
         self.sprite_note.config(text="First frame of its sprite set (usually the idle pose).")
 
@@ -723,19 +915,22 @@ class LevelTab(ttk.Frame):
         pan.add(cf, weight=3)
 
         side_nb = ttk.Notebook(pan)
-        side = ttk.Frame(side_nb, padding=4)
-        side_nb.add(side, text="Events")
-        self.gfx_page = ttk.Frame(side_nb, padding=4)
-        side_nb.add(self.gfx_page, text="Enemy graphics")
+        events_page, gfx_page = ScrollFrame(side_nb, track_width=True), ScrollFrame(side_nb, track_width=True)
+        side_nb.add(events_page, text="Events")
+        side_nb.add(gfx_page, text="Enemy graphics")
+        side = events_page.body
+        side.configure(padding=4)
+        self.gfx_page = gfx_page.body
+        self.gfx_page.configure(padding=4)
         self.side_nb = side_nb
         side_nb.bind("<<NotebookTabChanged>>", lambda e: self.on_side_tab())
         lf = ttk.Frame(side)
         lf.pack(fill="both", expand=True)
         cols = ("x", "y", "kind", "id", "what")
-        self.events = ttk.Treeview(lf, columns=cols, show="headings", selectmode="browse", height=14)
+        self.events = ttk.Treeview(lf, columns=cols, show="headings", selectmode="browse", height=8)
         for c, w in zip(cols, (50, 50, 60, 55, 160)):
             self.events.heading(c, text=c.title())
-            self.events.column(c, width=w, anchor="w")
+            self.events.column(c, width=px(w), anchor="w")
         es = ttk.Scrollbar(lf, orient="vertical", command=self.events.yview)
         self.events.configure(yscrollcommand=es.set)
         self.events.pack(side="left", fill="both", expand=True)
@@ -784,11 +979,11 @@ class LevelTab(ttk.Frame):
         self.space = ttk.Label(f, foreground="#555")
         self.space.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(f, text="Double-click the map to move the selected event there. Values are base 10.",
-                  foreground="#888", wraplength=300, justify="left").grid(row=7, column=0, columnspan=3, sticky="w")
+                  foreground="#888", wraplength=px(300), justify="left").grid(row=7, column=0, columnspan=3, sticky="w")
         self.auto_gfx = tk.BooleanVar(value=True)
         ttk.Checkbutton(f, text="Automatically load graphics for enemies I place", variable=self.auto_gfx).grid(
             row=11, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        self.gfx_warn = ttk.Label(f, foreground="#b45309", wraplength=300, justify="left")
+        self.gfx_warn = ttk.Label(f, foreground="#b45309", wraplength=px(300), justify="left")
         self.gfx_warn.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.gfx_fix = ttk.Button(f, text="Add its graphics to that set…", command=self.fix_graphics)
         self.ed_sprite = ttk.Label(f)
@@ -869,7 +1064,7 @@ class LevelTab(ttk.Frame):
         img = self.sprites.render(e.id, scale=2) if e.type == 3 else None
         if img:
             img.thumbnail((180, 180))
-            self.sprite_photo = ImageTk.PhotoImage(img)
+            self.sprite_photo = photo(img)
             self.ed_sprite.config(image=self.sprite_photo)
         else:
             self.sprite_photo = None
@@ -1017,15 +1212,15 @@ class LevelTab(ttk.Frame):
     def build_gfx_panel(self, parent):
         ttk.Label(parent, text="The stage is split into sections; each section loads graphics for a few "
                                "enemy types. An enemy only looks right in a section that loads its graphics.",
-                  foreground="#666", wraplength=330, justify="left").pack(anchor="w")
-        ttk.Label(parent, text="Section", font=("", 11, "bold")).pack(anchor="w", pady=(6, 0))
-        self.sec_list = tk.Listbox(parent, height=7, exportselection=False, font=("Menlo", 10))
+                  foreground="#666", wraplength=px(330), justify="left").pack(anchor="w")
+        ttk.Label(parent, text="Section", font="Bold").pack(anchor="w", pady=(6, 0))
+        self.sec_list = tk.Listbox(parent, height=7, exportselection=False, font="MonoSmall")
         self.sec_list.pack(fill="x", pady=2)
         self.sec_list.bind("<<ListboxSelect>>", lambda e: self.show_section())
 
         head = ttk.Frame(parent)
         head.pack(fill="x", pady=(8, 2))
-        ttk.Label(head, text="Enemies loaded here", font=("", 11, "bold")).pack(side="left")
+        ttk.Label(head, text="Enemies loaded here", font="Bold").pack(side="left")
         ttk.Button(head, text="+ Add enemy…", command=self.pick_enemy).pack(side="right")
         self.cards = ttk.Frame(parent)
         self.cards.pack(fill="x")
@@ -1035,7 +1230,7 @@ class LevelTab(ttk.Frame):
         self.meter_bar.pack(fill="x")
         self.meter_slots = ttk.Label(parent)
         self.meter_slots.pack(anchor="w", pady=(2, 0))
-        self.gfx_problems = ttk.Label(parent, foreground="#b91c1c", wraplength=330, justify="left")
+        self.gfx_problems = ttk.Label(parent, foreground="#b91c1c", wraplength=px(330), justify="left")
         self.gfx_problems.pack(anchor="w")
         b = ttk.Frame(parent)
         b.pack(fill="x", pady=(6, 0))
@@ -1055,7 +1250,7 @@ class LevelTab(ttk.Frame):
                                      selectmode="browse")
         for c, w, t in (("gfx", 50, "Gfx"), ("vram", 100, "VRAM"), ("pal", 50, "Palette"), ("slot", 50, "Slot")):
             self.adv_tree.heading(c, text=t)
-            self.adv_tree.column(c, width=w, anchor="w")
+            self.adv_tree.column(c, width=px(w), anchor="w")
         self.adv_tree.grid(row=0, column=0, columnspan=4, sticky="ew")
         self.adv_tree.bind("<<TreeviewSelect>>", lambda e: self.adv_show())
         self.adv_vars = {}
@@ -1112,7 +1307,7 @@ class LevelTab(ttk.Frame):
             img = self.sprites.render(ids[0], scale=1) if ids else None
             if img:
                 img.thumbnail((44, 44))
-                ph = ImageTk.PhotoImage(img)
+                ph = photo(img)
                 self.card_photos.append(ph)
                 ttk.Label(row, image=ph, width=6).pack(side="left")
             else:
@@ -1146,7 +1341,7 @@ class LevelTab(ttk.Frame):
         H = self.photo.height()
         self.canvas.create_rectangle(sec.start * k, 0, sec.end * k, H, outline="#facc15", width=3, tags="sec")
         self.canvas.create_text(sec.start * k + 6, 6, text=f"section X {sec.start}–{sec.end}", anchor="nw",
-                                fill="#facc15", font=("", 11, "bold"), tags="sec")
+                                fill="#facc15", font="Bold", tags="sec")
 
     def remove_entry(self, k):
         sec = self.current_section()
@@ -1178,7 +1373,7 @@ class LevelTab(ttk.Frame):
             return
         win = tk.Toplevel(self)
         win.title("Add enemy graphics to this section")
-        win.geometry("760x560")
+        win.geometry(f"{min(760, self.winfo_screenwidth() - 40)}x{min(560, self.winfo_screenheight() - 100)}")
         ttk.Label(win, text="Click an enemy to load its graphics in this section.", padding=6).pack(anchor="w")
         cv = tk.Canvas(win, background="#2a2a33", highlightthickness=0)
         sb = ttk.Scrollbar(win, orient="vertical", command=cv.yview)
@@ -1196,7 +1391,7 @@ class LevelTab(ttk.Frame):
                 continue
             gfx = G.sprite_ids(self.app.g, i)[1]
             img.thumbnail((cell - 20, cell - 36))
-            ph = ImageTk.PhotoImage(img)
+            ph = photo(img)
             self.pick_photos.append(ph)
             x, y = (n % cols) * cell, (n // cols) * cell
             tag = f"e{i}"
@@ -1205,11 +1400,11 @@ class LevelTab(ttk.Frame):
             cv.create_image(x + cell // 2, y + (cell - 24) // 2 + 4, image=ph, tags=tag)
             name = labels.get(f"{i:02X}", "")
             cv.create_text(x + cell // 2, y + cell - 14, text=f"{i:02X} {name}"[:18] + (" ✓" if gfx in loaded else ""),
-                           fill="#e5e7eb", font=("", 9), tags=tag)
+                           fill="#e5e7eb", font="Small", tags=tag)
             cv.tag_bind(tag, "<Button-1>", lambda e, gfx=gfx, win=win: (win.destroy(), self.load_graphics(sec, gfx)))
             n += 1
         cv.configure(scrollregion=(0, 0, cols * cell, ((n + cols - 1) // cols) * cell))
-        cv.bind_all("<MouseWheel>", lambda e: cv.yview_scroll(-e.delta, "units") if cv.winfo_exists() else None)
+        bind_wheel(cv, cv, cv.winfo_exists)
 
     # advanced raw editing
     def adv_fill(self, entries):
@@ -1272,7 +1467,7 @@ class LevelTab(ttk.Frame):
                 img = img.resize((int(img.width * s), int(img.height * s)))
             self.cache[key] = img
         img = self.cache[key]
-        self.photo = ImageTk.PhotoImage(img)
+        self.photo = photo(img)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.photo, anchor="nw")
         self.canvas.configure(scrollregion=(0, 0, img.width, img.height))
@@ -1297,7 +1492,7 @@ class LevelTab(ttk.Frame):
             self.canvas.create_rectangle(x - r, y - r, x + r, y + r, outline=c, width=2, tags=("ev", f"ev{n}"))
             if k >= 0.5:
                 self.canvas.create_text(x + r + 2, y - r, text=f"{e.id:02X}", fill=c, anchor="nw",
-                                        font=("Menlo", 9), tags=("ev", f"ev{n}"))
+                                        font="MonoTiny", tags=("ev", f"ev{n}"))
         i = self.selected_index()
         if i is not None and i < len(self.work):
             self.focus_event(self.work[i], scroll=False)
@@ -1360,11 +1555,13 @@ class CodeTab(ttk.Frame):
         for val, label in (("asm", "Assembly"), ("c", "C"), ("literal", "Literal C"), ("both", "Side by side")):
             ttk.Radiobutton(top, text=label, value=val, variable=self.view,
                             command=self.layout).pack(side="left", padx=2)
-        ttk.Label(self, text="C: decompiled — one function per state/step, registers folded into expressions, "
-                             "if/else rebuilt, names from what we've decoded. Literal C: one statement per "
-                             "instruction. Neither is compiled; names marked (?) in defs/lift are guesses. "
-                             "Side by side (Assembly + C): click a line to find the matching code in the other pane.",
-                  foreground="#666", wraplength=1100, justify="left").pack(fill="x", pady=(4, 0))
+        about = ttk.Label(self, text="C: decompiled — one function per state/step, registers folded into expressions, "
+                                     "if/else rebuilt, names from what we've decoded. Literal C: one statement per "
+                                     "instruction. Neither is compiled; names marked (?) in defs/lift are guesses. "
+                                     "Side by side (Assembly + C): click a line to find the matching code in the other "
+                                     "pane.", foreground="#666", wraplength=px(1100), justify="left")
+        about.pack(fill="x", pady=(4, 0))
+        about.bind("<Configure>", lambda e: about.configure(wraplength=max(200, e.width - 8)))
         self.panes = ttk.PanedWindow(self, orient="horizontal")
         self.panes.pack(fill="both", expand=True, pady=6)
         self.asm_frame, self.asm = self._text_pane("Assembly")
@@ -1373,8 +1570,8 @@ class CodeTab(ttk.Frame):
 
     def _text_pane(self, title):
         f = ttk.Frame(self.panes)
-        ttk.Label(f, text=title, font=("", 11, "bold")).grid(row=0, column=0, sticky="w")
-        t = tk.Text(f, font=MONO, wrap="none", undo=False)
+        ttk.Label(f, text=title, font="Bold").grid(row=0, column=0, sticky="w")
+        t = tk.Text(f, font="Mono", wrap="none", undo=False)
         vs = ttk.Scrollbar(f, orient="vertical", command=t.yview)
         hs = ttk.Scrollbar(f, orient="horizontal", command=t.xview)
         t.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
@@ -1383,7 +1580,7 @@ class CodeTab(ttk.Frame):
         hs.grid(row=2, column=0, sticky="ew")
         f.rowconfigure(1, weight=1)
         f.columnconfigure(0, weight=1)
-        t.tag_configure("label", foreground="#0a58ca", font=(MONO[0], MONO[1], "bold"))
+        t.tag_configure("label", foreground="#0a58ca", font="MonoBold")
         t.tag_configure("note", foreground="#2e7d32")
         t.tag_configure("hit", background="#fff3b0")
         t.bind("<ButtonRelease-1>", lambda e, t=t: self.sync_from(t))

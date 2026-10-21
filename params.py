@@ -23,7 +23,9 @@ from defs import (BOSSES, KNOWN_OBJECT_NAMES, Param, LDA_IMM, PROJECTILES, NUM_P
 from mmx1 import MMX1, snes2pc, save_rom, LEVEL_NAMES
 
 HERE = Path(__file__).parent
-STOCK_ROM = HERE.parent / "Mega Man X (USA) (Rev 1).sfc"
+ROM_NAME = "Mega Man X (USA) (Rev 1).sfc"
+# next to this folder (the documented spot), or inside it
+STOCK_ROM = next((d / ROM_NAME for d in (HERE.parent, HERE) if (d / ROM_NAME).is_file()), HERE.parent / ROM_NAME)
 LABELS = HERE / "labels.json"
 
 
