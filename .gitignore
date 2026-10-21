@@ -1,0 +1,14 @@
+# ROM images and anything extracted from them (Capcom's copyright) — regenerate from your own ROM
+*.sfc
+*.smc
+*.srm
+work/
+out/
+reference/ref_expanded.sfc
+
+# build artefacts / local state
+reference/harness
+__pycache__/
+*.pyc
+mmxlab.json
+.DS_Store
