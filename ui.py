@@ -145,7 +145,8 @@ class ScrollFrame(ttk.Frame):
         if (need, have) == self._last:
             return
         self._last = (need, have)
-        if self.track_width and int(self.canvas.cget("width")) != need[0]:
+        # (cget may return screen units like "10c", so compare against the realised request size)
+        if self.track_width and self.canvas.winfo_reqwidth() != need[0]:
             self.canvas.configure(width=need[0])    # asks for the body's width; a squeezed pane still scrolls
         w, h = max(need[0], have[0]), max(need[1], have[1])
         self.canvas.itemconfigure(self.item, width=w, height=h)
@@ -1237,7 +1238,7 @@ class LevelTab(ttk.Frame):
                   foreground="#666", wraplength=px(330), justify="left").pack(anchor="w")
         ttk.Label(parent, text="Section", font="Bold").pack(anchor="w", pady=(6, 0))
         self.sec_list = tk.Listbox(parent, height=7, exportselection=False, font="MonoSmall")
-        self.sec_list.pack(fill="x", pady=2)
+        self.sec_list.pack(fill="both", expand=True, pady=2)   # soaks up spare height
         self.sec_list.bind("<<ListboxSelect>>", lambda e: self.show_section())
 
         head = ttk.Frame(parent)
