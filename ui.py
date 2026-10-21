@@ -910,7 +910,7 @@ class LevelTab(ttk.Frame):
                             command=self.draw_markers if key == "events" else self.draw).pack(side="left", padx=6)
             self.opts[key] = v
         ttk.Label(top, text="Zoom").pack(side="left", padx=(12, 2))
-        self.zoom = ttk.Combobox(top, state="readonly", width=5, values=["25%", "50%", "100%"])
+        self.zoom = ttk.Combobox(top, state="readonly", width=5, values=["25%", "50%", "100%", "150%", "200%", "300%"])
         self.zoom.current(1)
         self.zoom.pack(side="left")
         self.zoom.bind("<<ComboboxSelected>>", lambda e: self.draw())
@@ -1474,7 +1474,7 @@ class LevelTab(ttk.Frame):
 
     # --- map -----------------------------------------------------------------------------
     def scale(self):
-        return {0: 0.25, 1: 0.5, 2: 1.0}[self.zoom.current()]
+        return (0.25, 0.5, 1.0, 1.5, 2.0, 3.0)[self.zoom.current()]
 
     def draw(self):
         L = self.level.current()
@@ -1486,7 +1486,9 @@ class LevelTab(ttk.Frame):
                          collision=self.opts["collision"].get(), locks=self.opts["locks"].get())
             s = self.scale()
             if s != 1:
-                img = img.resize((int(img.width * s), int(img.height * s)))
+                # Keep pixels crisp when enlarging; smooth when shrinking.
+                img = img.resize((int(img.width * s), int(img.height * s)),
+                                 Image.NEAREST if s > 1 else Image.BICUBIC)
             self.cache[key] = img
         img = self.cache[key]
         self.photo = photo(img)
