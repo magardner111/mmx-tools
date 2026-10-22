@@ -86,8 +86,31 @@ HELPERS = {
     0x8499AF: "x_wall_check",        # (?) carry set = wall in the facing direction (stops a walk)
     0x80E54D: "x_read_buttons",      # pad_held -> X_dpad / X buttons via the button setup (verified)            # X's per-frame update (see PLAYER.md)
     0x849D07: "x_contact_damage",    # hurt_x_on_contact's hit path: hurt_lock += 1, step $0E, HP -= damage
-    0x849F2F: "x_take_damage",       # X step = $0E (hurt); X_hp -= X_pending_damage (halved by upgrade
-                                     # bit 2 (?)); at 0 HP X step = $0C (dying)
+    0x849F2F: "x_take_damage",       # X step = $0E (hurt); X_hp -= X_pending_damage, ceil(d/2) with the
+                                     # body (upgrades $04) (verified); at 0 HP X step = $0C (dying)
+    # upgrades (verify_upgrades.py, see PLAYER.md "Upgrades")
+    0x84A9EF: "grant_boss_weapon",   # boss_defeated_sequence step $16: level < 9 -> weapon_flags of that level |= $40 (verified)
+    0x809FEB: "bosses_beaten_mask",  # A = bit per beaten main boss from the weapon words ($FF = all 8) (verified)
+    0x809EF9: "refill_weapons",      # stage start: every owned weapon word (and the 9th, $1F97) = $DC00 (verified)
+    0x809EEB: "clear_weapons",       # all weapon words = 0 (?)
+    0x8199D3: "switch_weapon",       # L/R: next owned weapon (wraps buster <-> $10), L+R = buster, not while a shot is out;
+                                     # sets the shots-on-screen limit X+$67 from $86:BAB8 (verified)
+    0x8194AF: "weapon_ammo_cost",    # ammo per shot $86:BA92[w], full charge + $86:BAA4[w] and projectile + 9 (verified)
+    0x81E11A: "give_weapon_energy",  # weapon energy pickup: current weapon, else first owned non-full; never clears its
+                                     # overflow flag $0002, so the remainder reaches every later non-full weapon (verified)
+    0x81A062: "hadouken_input",      # Down, Down+forward, forward (X_hadouken_stage 2/4/6, 20-frame X_hadouken_timer), then
+                                     # shoot pressed or released (verified)
+    0x81A0EA: "hadouken_check",      # HP exactly 32, hadouken bit 7, X step 0/2/4/$0A -> step $42 (verified)
+    0x81A114: "hadouken_fire",       # X-shot 4 at X+25 px, 4 px a frame, sound $AF (verified)
+    0x819EA1: "helmet_break_block",  # jump/wall-jump ceiling hit: with the helmet a $3C tile is broken (tile + 1, sound $23) (verified)
+    0x8198FC: "legs_break_wall",     # wall kick with the legs breaks a $3C wall tile (verified)
+    0x819731: "double_tap_dash",     # with the legs: second forward press within 12 frames dashes (step $14) (verified)
+    0x80F1E0: "password_decode",     # 4 bytes -> upgrades, hearts (max_hp = $10 + 2 each), bosses, hadouken, intro_cleared (?)
+    0x80C6C6: "subtank_menu_start",  # pause menu, Y on a sub tank (not at full HP) (verified)
+    0x80C723: "subtank_menu_tick",   # every 4 frames: HP +1 (+2 if slot X_hp-10 is full: game bug), tank -1 down to $80 (verified)
+    0x80CDA1: "subtank_compact",     # an emptied tank moves behind the non-empty owned ones (verified)
+    0x82E4E2: "life_energy_give",    # +8 HP large / +2 small, 1 every 4 frames; at full HP +2/+1 units into the first
+                                     # owned non-full sub tank, no spill (verified)
     0x84A677: "boss_defeated_sequence",  # called every frame of a boss's death state (verified); freezes
                                          # objects, palette flash to white, explosions, freezes X
                                          # for the stage clear; negative once finished
@@ -119,7 +142,21 @@ RAM_NAMES.update({0x0BAD: "X_x", 0x0BB0: "X_y", 0x0BCF: "X_hp", 0x0BDB: "X_weapo
                   0x0BCA: "X_prev_x",       # X+$22: X's x before this frame's move (Flame Mammoth's oil averages with it) (verified)
                   0x0C2F: "X_status_flags", # X+$87: bit 7 set while stunned (step $36); Spark Mandrill's quake won't stun again while it's set (seen in Mesen: one stun per quake)
                   0x0C2D: "X_stun_timer",   # X+$85: set by x_stun, counted down in step $36 (verified)
-                  0x1F99: "upgrades",       # bit $08 dash, $04 armor (halves knockback), $02 arm charge level 3 (verified); $01 (?)
+                  0x1F99: "upgrades",       # armor $01 helmet, $02 arm, $04 body, $08 legs; sub tanks collected $10 Eagle,
+                                            # $20 Armadillo, $40 Mandrill, $80 Mammoth (verified, PLAYER.md "Upgrades")
+                  0x1F9C: "hearts",         # heart tanks, bit per stage: $01 Penguin $02 Armadillo $04 Eagle $08 Chameleon
+                                            # $10 Mammoth $20 Kuwanger $40 Mandrill $80 Octopus (verified)
+                  0x1F9A: "max_hp",         # $10 + 2 per heart, cap $20 (verified)
+                  0x1F83: "sub_tanks",      # 4 slots $1F83-$1F86: bit 7 owned, energy = value - $80, full $8E (verified)
+                  0x1F7E: "hadouken",       # bit 7 owned; low bits = Armadillo capsule spawns, capped at 5 (verified)
+                  0x1F7C: "fortress_open",  # bit 6: all 8 main bosses beaten (set at $80:9C13) (verified); bit 7 (?)
+                  0x1F80: "lives",          # (?) 2 at a new game, 1-up +1 (max 9), death -1
+                  0x1F9B: "intro_cleared",  # (?) 0 = a new game starts in the intro stage; password byte 3 bit 4
+                  0x0C27: "X_hadouken_stage",  # X+$7F: motion stage 0/2/4/6 (verified)
+                  0x0C28: "X_hadouken_timer",  # X+$80: 20 frames to the next input (verified)
+                  0x0BBE: "X_gfx",          # X+$16: sprite set, $18 with the helmet (verified)
+                  0x0C38: "x_arm_part", 0x0C58: "x_body_part", 0x0C78: "x_legs_part",  # X's armor sprite objects
+                                            # ($20 bytes each; nonzero = drawn), made from upgrades by X's init (verified)
                   0x1F3F: "part1_status", 0x1F40: "part2_status", 0x1F41: "part3_status",  # fortress bosses' parts;
                   0x1F42: "boss_signal",    # bit 7 = destroyed; boss_signal: part -> boss handshakes (?)
                   0x1F23: "boss_cleared",   # set when a boss is finished (also by boss_already_beaten)
@@ -132,7 +169,8 @@ RAM_NAMES.update({0x0BAD: "X_x", 0x0BB0: "X_y", 0x0BCF: "X_hp", 0x0BDB: "X_weapo
                   0x1F0C: "boss_defeated",  # set at boss HP 0: enemies stop hurting X, X's own update reads it
                   0x1F0E: "hud_boss",       # object whose HP the boss bar shows (0 = no bar)
                   0x1F10: "hud_boss_bar_state",  # 0 set up, 2 redraw when hp bit 7 set, 4 remove, 6 hide, 8 idle
-                  0x1F86: "weapon_flags",   # [stage*2]: high byte of each weapon's word; bit 6 = that stage's boss beaten
+                  0x1F86: "weapon_flags",   # [stage*2]: high byte of weapon w's word $1F85+2w (w = the boss's level):
+                                            # bits 0-5 ammo (max $1C), bit 6 owned = boss beaten, bit 7 redraw the HUD bar (verified)
                   0x1E4D: "screen_left"})   # bosses place themselves at screen_left + $10/$20/$E0
 BRANCH = {"BPL", "BMI", "BVC", "BVS", "BCC", "BCS", "BNE", "BEQ", "BRA", "BRL"}
 

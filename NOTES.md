@@ -332,3 +332,20 @@ y 272, floor y 432); his intro starts by itself.
 Setting a boss's beaten flag (`$1F86 + 2×stage` bit 6) before X reaches his room makes entering the room end the stage
 (seen in Mesen: X goes step $1E → $1A → $18 and disappears; the level-load also rewrites the flag early, so it has to
 be held). Instead, start from the boss's fight-start state and clear his object slot every frame.
+
+## Reaching upgrades in tests (verified by verify_upgrades.py)
+
+Warps that land X on the item (touched around frame 430-510): hearts Armored Armadillo `Run(3, 0x04CA, 0x0937)`, Chill
+Penguin `Run(8, 0x148C, 0x02B4)`, Storm Eagle `Run(5, 0x0020, 0x0570)`, Flame Mammoth `Run(4, 0x0FB8, 0x03D7)`; sub tanks
+Flame Mammoth `Run(4, 0x0B3A)`, Armored Armadillo `Run(3, 0x0A14, 0x0370)`, Storm Eagle `Run(5, 0x0750, 0x0288)`; large
+life energy `Run(4, 0x0870)`. Pokes of `upgrades` (`$1F99`) / `hearts` (`$1F9C`) must land after the new-game init
+clears them (frame 151) and before the item's spawn check (about frame 426).
+
+Capsules (walk in, press B while the text box is up, jump in once Dr. Light leaves): Storm Eagle `Run(5, x=0x0F60,
+y=0x0280)`, Flame Mammoth `Run(4, x=0x0930, y=0x0260)`, Chill Penguin `Run(8, x=0x09A0, y=0x0240)` (5000 frames: long
+text), Sting Chameleon `Run(2, x=0x05D0, y=0x0180)` (wait 64 px left while the capsule rises), Armored Armadillo
+`Run(3, x=0x12C0, y=0x0900)` with `max_hp`/HP $20, `upgrades`/`hearts` $FF, `fortress_open` $40, `hadouken` 4 poked at
+frame 200. Some warps with an explicit y leave X stuck in terrain (e.g. `Run(4, 0x08E0, y=0x0280)`).
+
+Zero (Sigma stage 1): start X at x $0A40 in level 9 with `$1F7D` held at 2 (after Vile), walk right, poke X past the
+locked Vile-room edge at frame 900, press Y while the text box is open.

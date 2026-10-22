@@ -127,7 +127,7 @@ def main():
         print("playing to the start of the fight...", flush=True)
         fight_state(STATE, 8, 7560, WALK, f"(function() local m = find(0x0E68, 0x1228, {ID}); "
                                           "return m and r8(m + 1) == 4 end)()")
-        print(f"running {len(runs)} emulator sessions, 4 at a time...", flush=True)
+        print(f"running {len(runs)} emulator sessions...", flush=True)
         out = dict(zip(runs, run_all(list(runs.values()))))
         json.dump(out, open(CACHE, "w"))
     t = {k: T(v) for k, v in out.items()}
