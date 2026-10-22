@@ -132,7 +132,7 @@ return {right = frame >= 20, b = (st == 0 and frame >= 150 and frame % 30 < 5) o
     else:
         if not Path(STATE).exists():
             sys.exit("run verify_armored_armadillo.py first (it makes the fight-start state)")
-        print(f"running {len(runs)} emulator sessions, 4 at a time...", flush=True)
+        print(f"running {len(runs)} emulator sessions...", flush=True)
         out = dict(zip(runs, run_all(list(runs.values()))))
         json.dump(out, open(CACHE, "w"))
     t = {k: P(v) for k, v in out.items()}

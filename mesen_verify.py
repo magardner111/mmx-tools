@@ -10,13 +10,21 @@ Run a test ROM headless in Mesen 2 with a generated Lua script and get back what
     run.input("return {right = r16(0x0BAD) < 7720}")   # Lua deciding the buttons each frame
     events = run.go()                        # list of dicts: {"f": frame, "tag": ..., ...}
 
-Mesen runs at about 64 frames/s on the Pi (CPU-bound), so `run_all` runs several at once (one per core).
-Needs Mesen 2 (../emulator/mesen.sh sets DOTNET_ROOT) and the project ROM work/hack.sfc.
+Mesen is CPU-bound. Headless: about 64 frames/s on the Pi 400; on the M4 Max (10 performance cores) 416 frames/s
+alone, 389 each with 10 at once (3,890 total; 14 at once gives no more). `run_all` runs several at once, and every
+Run takes one of MESEN_SLOTS machine-wide slots (lock files in work/.mesen_slots), so suites started by different
+processes share the cores instead of slowing each other into timeouts.
+Needs Mesen 2 and the project ROM work/hack.sfc. Runs are headless (--testrunner). MESEN_WINDOW=1 shows them in
+Mesen's window instead (needs the script setting "Allow access to I/O and OS functions", AllowIoOsAccess in the
+settings.json next to the Mesen binary, since the Lua then writes its log to a file).
 """
 import collections
+import fcntl
 import os
 import subprocess
+import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -24,7 +32,15 @@ from mmx1 import MMX1, save_rom
 from testwarp import make_test_rom
 
 HERE = Path(__file__).parent
-MESEN = HERE.parent / "emulator" / "mesen.sh"
+if os.environ.get("MESEN"):
+    MESEN = Path(os.environ["MESEN"])
+elif sys.platform == "darwin":
+    MESEN = HERE.parent / "emulator" / "Mesen.app" / "Contents" / "MacOS" / "Mesen"
+else:
+    MESEN = HERE.parent / "emulator" / "mesen.sh"   # sets DOTNET_ROOT (Mesen 2 needs .NET 8)
+WINDOW = os.environ.get("MESEN_WINDOW") == "1"   # default headless (--testrunner)
+SLOTS = int(os.environ.get("MESEN_SLOTS", 10 if sys.platform == "darwin" else os.cpu_count()))
+MIN_FPS = 15 if sys.platform == "darwin" else 8   # timeout = frames / MIN_FPS + margin (heavy logging: ~26/s)
 NO_DAMAGE = "7E0BD808"           # Action Replay: X's hurt lock (X + $30) held at 8
 ENEMIES = (0x0E68, 0x1228)       # alloc_enemy list (0x40 bytes per object)
 LISTS = {"enemy": (0x0E68, 0x1228), "shot": (0x1428, 0x1628), "misc": (0x1628, 0x1928), "effect": (0x1928, 0x1D28)}
@@ -45,7 +61,10 @@ local function r16(a) return emu.read(a, mt) + emu.read(a + 1, mt) * 256 end
 local function s16(a) local v = r16(a); if v >= 0x8000 then v = v - 0x10000 end; return v end
 local function w8(a, v) emu.write(a, v & 0xFF, mt) end
 local function w16(a, v) w8(a, v); w8(a + 1, v >> 8) end
-local function out(tag, s) print(string.format("@%d|%s|%s", frame, tag, s or "")) end
+local emit = print
+local lf = LOG_PATH and io.open(LOG_PATH, "w")
+if lf then lf:setvbuf("full"); emit = function(s) lf:write(s, "\n") end end
+local function out(tag, s) emit(string.format("@%d|%s|%s", frame, tag, s or "")) end
 local function find(lo, hi, id)
   for a = lo, hi - 0x40, 0x40 do if r8(a) ~= 0 and r8(a + 0x0A) == id then return a end end
 end
@@ -176,7 +195,7 @@ emu.addMemoryCallback(function()
   if not state_saved and ({self.state_out[0]}) then
     state_saved = true
     local st = emu.createSavestate()
-    print("#S|" .. (st:gsub(".", function(c) return string.format("%02x", c:byte()) end)))
+    emit("#S|" .. (st:gsub(".", function(c) return string.format("%02x", c:byte()) end)))
   end
 end, emu.callbackType.exec, 0x808000, 0x80FFFF)""")
         for i, c in enumerate(self.calls):
@@ -222,9 +241,10 @@ emu.addEventCallback(function() emu.setInput(buttons() or {{}}, 0) end, emu.even
   if n ~= cnt{i} then out("{tag}", "n=" .. n); cnt{i} = n end end""")
         for i, (f, _) in enumerate(self.shots):
             body.append(f'if frame == {f} then local p = emu.takeScreenshot(); '
-                        f'print("#{i}|" .. (p:gsub(".", function(c) return string.format("%02x", c:byte()) end))) end')
+                        f'emit("#{i}|" .. (p:gsub(".", function(c) return string.format("%02x", c:byte()) end))) end')
         body += self.every_frame_lua
-        body.append(f"if frame >= {self.frames} then out('end', '') emu.stop(0) end")
+        # in the window emu.stop doesn't close Mesen (go() does): log nothing after 'end'
+        body.append(f"if frame == {self.frames} then out('end', ''); if lf then lf:flush() end; emu.stop(0); emit = function() end end")
         L.append("emu.addEventCallback(function()\n  frame = frame + 1\n  "
                  + "\n  ".join(body) + "\nend, emu.eventType.endFrame)")
         return "\n".join(L)
@@ -280,21 +300,71 @@ end, emu.eventType.endFrame)"""
         g = make_test_rom(MMX1(self.rom), self.level, self.x, self.y)
         if self.patch:
             self.patch(g)
-        with tempfile.TemporaryDirectory() as tmp:
-            rom, script = Path(tmp) / "t.sfc", Path(tmp) / "t.lua"
+        timeout = self.frames / MIN_FPS + (120 if WINDOW else 180)
+        with tempfile.TemporaryDirectory() as tmp, mesen_slot():
+            rom, script, log = Path(tmp) / "t.sfc", Path(tmp) / "t.lua", Path(tmp) / "t.log"
             save_rom(g, rom)
-            script.write_text(self.lua())
+            lua = self.lua()
+            if WINDOW:
+                lua = f"LOG_PATH = {str(log)!r}\n" + lua
+            script.write_text(lua)
             if keep:
                 Path(keep).write_text(script.read_text())
-            p = subprocess.run([str(MESEN), "--testrunner", str(rom), str(script)], capture_output=True,
-                               text=True, timeout=self.frames / 8 + 180)
-        for line in p.stdout.splitlines():
+            if WINDOW:
+                stdout = run_window(rom, script, log, timeout)
+            else:
+                stdout = subprocess.run([str(MESEN), "--testrunner", str(rom), str(script)], capture_output=True,
+                                        text=True, timeout=timeout).stdout
+        for line in stdout.splitlines():
             if line.startswith("#S|"):
                 Path(self.state_out[1]).write_bytes(bytes.fromhex(line[3:]))
             elif line.startswith("#"):
                 i, _, data = line[1:].partition("|")
                 Path(self.shots[int(i)][1]).write_bytes(bytes.fromhex(data))
-        return parse(p.stdout)
+        return parse(stdout)
+
+
+class mesen_slot:
+    """Hold one of SLOTS machine-wide Mesen slots (an flock'd file each) while a run is going."""
+    def __enter__(self):
+        d = HERE / "work" / ".mesen_slots"
+        d.mkdir(parents=True, exist_ok=True)
+        while True:
+            for i in range(SLOTS):
+                f = open(d / f"slot{i}", "w")
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.f = f
+                    return self
+                except OSError:
+                    f.close()
+            time.sleep(0.2)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def run_window(rom, script, log, timeout):
+    """Run in Mesen's window until the script logs 'end' (the run's last line), then close it."""
+    p = subprocess.Popen([str(MESEN), str(rom), str(script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    start, text = time.time(), ""
+    try:
+        while time.time() - start < timeout:
+            time.sleep(0.25)
+            if log.exists():
+                text = log.read_text(errors="replace")
+                if "|end|" in text or p.poll() is not None:
+                    break
+        else:
+            keep = HERE / "work" / f"timeout_{os.getpid()}_{int(start)}"
+            keep.with_suffix(".lua").write_text(script.read_text())
+            keep.with_suffix(".log").write_text(text)
+            raise subprocess.TimeoutExpired([str(MESEN)], timeout, output=text)
+    finally:
+        p.kill()
+        p.wait()
+    return text
 
 
 def parse(text):
@@ -312,8 +382,8 @@ def parse(text):
 
 
 def run_all(runs, workers=None):
-    """Run several Runs at once (Mesen is single-threaded; the Pi has 4 cores)."""
-    with ThreadPoolExecutor(max_workers=workers or os.cpu_count()) as ex:
+    """Run several Runs at once (Mesen is single-threaded; each Run also waits for a machine-wide slot)."""
+    with ThreadPoolExecutor(max_workers=workers or SLOTS) as ex:
         return list(ex.map(lambda r: r.go(), runs))
 
 

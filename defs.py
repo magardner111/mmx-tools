@@ -754,7 +754,8 @@ PLAYER = SimpleNamespace(
             0x69: "facing", 0x22: "prev_x", 0x85: "stun_timer", 0x87: "status_flags",
             0x89: "untouchable_2", 0x8A: "untouchable",
             0x4E: "step_timer", 0x52: "dash_timer", 0x55: "dash_jump", 0x57: "charge_timer", 0x58: "charge_state",
-            0x59: "shot_request", 0x5B: "charge_level", 0x5C: "move_speed", 0x5F: "fall_cap", 0x77: "wall_stick"},
+            0x59: "shot_request", 0x5B: "charge_level", 0x5C: "move_speed", 0x5F: "fall_cap", 0x77: "wall_stick",
+            0x16: "gfx", 0x7F: "hadouken_stage", 0x80: "hadouken_timer"},
     state_names=["init", "alive"],
     attack_handlers=[],
     func_names={0x8181A3: "init", 0x81825D: "alive",
@@ -766,7 +767,8 @@ PLAYER = SimpleNamespace(
                 0x818600: "step_land", 0x818718: "step_wall_jump", 0x81890E: "step_dash", 0x8189AA: "step_dash_end",
                 0x8195EC: "x_start_jump", 0x819934: "x_step_speeds", 0x819662: "x_start_fall",
                 0x8195D6: "x_to_normal", 0x819580: "x_face_dpad",
-                0x81984A: "charge_idle", 0x819859: "charge_start", 0x81988A: "charge_hold"},
+                0x81984A: "charge_idle", 0x819859: "charge_start", 0x81988A: "charge_hold",
+                0x819017: "step_hadouken", 0x8192F3: "step_capsule_pose"},
     # step $46 also runs step_boss_freeze (Storm Eagle's ride)
 )
 
@@ -802,7 +804,11 @@ KNOWN_OBJECT_NAMES = {
     0x6B: "Wolf Sigma hand (?)",
     0x69: "Vile",
     0x2D: "Batton Bone",
-    0x4D: "Dr. Light capsule",
+    0x4D: "Dr. Light capsule (grants an armor part / the Hadouken)",
+    0x4E: "capsule light (sets the part's upgrades bit)",
+    0x5C: "Dr. Light (capsule hologram, talks)",
+    0x66: "Zero (Sigma stage 1; gives the arm if X lacks it)",
+    0x33: "Zero (intro stage / start of Sigma stage 1) (?)",
     0x55: "Storm Eagle's egg (hatches into 4 x 0x56)",
     0x56: "Storm Eagle's bird (sub-id 0-3)",
     0x0E: "Flame Mammoth's trunk (follows him; falls off at trunk_hp 0)",

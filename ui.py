@@ -145,7 +145,8 @@ class ScrollFrame(ttk.Frame):
         if (need, have) == self._last:
             return
         self._last = (need, have)
-        if self.track_width and int(self.canvas.cget("width")) != need[0]:
+        # (cget may return screen units like "10c", so compare against the realised request size)
+        if self.track_width and self.canvas.winfo_reqwidth() != need[0]:
             self.canvas.configure(width=need[0])    # asks for the body's width; a squeezed pane still scrolls
         w, h = max(need[0], have[0]), max(need[1], have[1])
         self.canvas.itemconfigure(self.item, width=w, height=h)
@@ -910,7 +911,7 @@ class LevelTab(ttk.Frame):
                             command=self.draw_markers if key == "events" else self.draw).pack(side="left", padx=6)
             self.opts[key] = v
         ttk.Label(top, text="Zoom").pack(side="left", padx=(12, 2))
-        self.zoom = ttk.Combobox(top, state="readonly", width=5, values=["25%", "50%", "100%"])
+        self.zoom = ttk.Combobox(top, state="readonly", width=5, values=["25%", "50%", "100%", "150%", "200%", "300%"])
         self.zoom.current(1)
         self.zoom.pack(side="left")
         self.zoom.bind("<<ComboboxSelected>>", lambda e: self.draw())
@@ -1237,7 +1238,7 @@ class LevelTab(ttk.Frame):
                   foreground="#666", wraplength=px(330), justify="left").pack(anchor="w")
         ttk.Label(parent, text="Section", font="Bold").pack(anchor="w", pady=(6, 0))
         self.sec_list = tk.Listbox(parent, height=7, exportselection=False, font="MonoSmall")
-        self.sec_list.pack(fill="x", pady=2)
+        self.sec_list.pack(fill="both", expand=True, pady=2)   # soaks up spare height
         self.sec_list.bind("<<ListboxSelect>>", lambda e: self.show_section())
 
         head = ttk.Frame(parent)
@@ -1474,7 +1475,7 @@ class LevelTab(ttk.Frame):
 
     # --- map -----------------------------------------------------------------------------
     def scale(self):
-        return {0: 0.25, 1: 0.5, 2: 1.0}[self.zoom.current()]
+        return (0.25, 0.5, 1.0, 1.5, 2.0, 3.0)[self.zoom.current()]
 
     def draw(self):
         L = self.level.current()
@@ -1486,7 +1487,9 @@ class LevelTab(ttk.Frame):
                          collision=self.opts["collision"].get(), locks=self.opts["locks"].get())
             s = self.scale()
             if s != 1:
-                img = img.resize((int(img.width * s), int(img.height * s)))
+                # Keep pixels crisp when enlarging; smooth when shrinking.
+                img = img.resize((int(img.width * s), int(img.height * s)),
+                                 Image.NEAREST if s > 1 else Image.BICUBIC)
             self.cache[key] = img
         img = self.cache[key]
         self.photo = photo(img)

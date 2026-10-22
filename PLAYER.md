@@ -32,6 +32,9 @@ Names marked (?) come from reading the code only; the rest were seen in Mesen (s
 | `$5C` | `$0C04` | move_speed | horizontal speed: $178 walking/jumping, $375 dashing (verified) |
 | `$5F` | `$0C07` | fall_cap | −$580, set by init; the fall step clamps vy to it before gravity (verified: −$5C0 at full speed) |
 | `$77` | `$0C1F` | wall_stick | 8 when a wall slide starts: vy held at 0 meanwhile (verified) |
+| `$16` | `$0BBE` | gfx | sprite set: $18 with the helmet (`upgrades` $01), set by init and by the helmet's capsule (verified) |
+| `$7F` | `$0C27` | hadouken_stage | Hadouken motion: 2 after Down, 4 after Down+forward, 6 after forward (verified) |
+| `$80` | `$0C28` | hadouken_timer | 20 at each stage: the next input must come within 20 frames (verified) |
 | `$8A` | `$0C32` | **untouchable** | rebuilt every frame by X's update (`$81:8142`): `boss_defeated \| hurt_lock \| $89`. `hurt_x_on_contact` skips X while it's nonzero |
 
 ## The Action Replay code `7E0BD808` (no damage, walk through enemies)
@@ -69,6 +72,8 @@ after X is through the door.
 | `$22` | `$81:89FA` | `step_beam_in` | beaming in (verified, see below; init sets it, or `$44` if `$1F7F` ≠ 0) |
 | `$46` | `$81:8B57` | `step_boss_freeze` | held during Storm Eagle's platform ride and intro, let go the frame he starts fighting (seen in Mesen) |
 | `$36` | `$81:9249` | `step_stunned` | stunned (`x_stun`): a stagger animation, then `stun_timer` counts down; lasts `stun_timer` + 32 frames (verified with Flame Mammoth's landing: 30 → 62, 14 → 46; and `x_stun(40)` called directly → 72) |
+| `$38` | `$81:92F3` | `step_capsule_pose` | X's pose after a capsule gives a part, about 60 frames, then step 0 (verified) |
+| `$42` | `$81:9017` | `step_hadouken` | Hadouken: 42 frames; projectile 4 spawned 17 frames in (`hadouken_fire` (`$81:A114`)) (verified) |
 | `$34`, `$3A` | | | Sigma 4 ending, Sigma 4 cutscenes (?) |
 
 `python3 decomp.py x` prints X's whole update as C with these names (symbols: `PLAYER` in `defs.py`).
@@ -81,8 +86,8 @@ a normal hit uses.
 |---|---|---|
 | `$81:812E` | `x_update` | X's per-frame update: rebuilds `untouchable`, runs the state/step handler |
 | `$84:9B03` | `hurt_x_on_contact` | enemies call it; skips X while `untouchable` / `boss_defeated` |
-| `$84:9D07` | `x_contact_damage` | `hurt_lock += 1`, step `$0E`, HP −= pending (halved by upgrade bit 2) |
-| `$84:9F2F` | `x_take_damage` | same, from projectiles / scripted damage |
+| `$84:9D07` | `x_contact_damage` | `hurt_lock += 1`, step `$0E`, HP −= pending (ceil(d/2) with the body, `upgrades` $04) (verified) |
+| `$84:9F2F` | `x_take_damage` | same, from projectiles / scripted damage (verified) |
 | `$84:9F19` | `x_grabbed` | step `$16`, hurt_lock = 8 |
 | `$84:9F7E` | `x_drop` | step 8, hurt_lock = 0 |
 | `$84:9F8A` / `$84:9FB2` | `x_hold` / `x_resume` | |
@@ -92,6 +97,11 @@ a normal hit uses.
 | `$81:9662` / `$81:95D6` | `x_start_fall` / `x_to_normal` | step 8 / step 0 |
 | `$81:984A` / `$81:9859` / `$81:988A` | `charge_idle` / `charge_start` / `charge_hold` | the charge state machine (`charge_state` 0/2/4); on release `shot_request` = `$86:BA71`[`charge_level`] (verified) |
 | `$84:A00D` | `x_stun` | step `$36`, `stun_timer` (`$0C2D`) = A: X is stunned A + 32 frames (verified) |
+| `$81:99D3` | `switch_weapon` | L/R weapon switching (verified, see Upgrades) |
+| `$81:94AF` | `weapon_ammo_cost` | ammo per shot and the charged projectile id (verified) |
+| `$81:A062` / `$81:A0EA` / `$81:A114` | `hadouken_input` / `hadouken_check` / `hadouken_fire` | the Hadouken (verified) |
+| `$81:9731` | `double_tap_dash` | dash on a double tap of forward, with the legs (verified) |
+| `$81:9EA1` / `$81:98FC` | `helmet_break_block` / `legs_break_wall` | breaking `$3C` blocks with the helmet / legs (verified) |
 
 ## Beaming in (step `$22`) — verified
 
@@ -129,8 +139,7 @@ gives the same answer for all 51,968 cells of Storm Eagle's stage.
 
 ## Moving and being pushed — verified (verify_storm_eagle.py)
 
-X walks 1.5 px a frame. Without the leg upgrade he can't dash (the test save has none; setting bit 0 of
-`upgrades` (`$1F99`) did not give him one, so where the legs are recorded is still unknown), so a push of
+X walks 1.5 px a frame. Without the leg upgrade (`upgrades` (`$1F99`) bit $08) he can't dash, so a push of
 2 px a frame (Storm Eagle's Gust) beats walking; walking into it he still loses 0.5 px a frame. Pushes are
 written straight into his position, `X_x` (`$0BAD`, with its fraction at `$0BAC`), not his speed.
 
@@ -143,14 +152,93 @@ written straight into his position, `X_x` (`$0BAD`, with its fraction at `$0BAC`
   upgrade (`upgrades` bit $02), held 180 frames (timer 1): projectile 2 plus a second X-shot object, id $1D.
   The X-shot object id is the projectile id the damage tables use (`last_hit_projectile` was 3 for full charges).
 
-## Upgrades (`upgrades`, `$1F99`)
+## Upgrades — verified (verify_upgrades.py, 149/149)
 
-| bit | effect | |
+### Where they are kept
+
+| RAM | name | contents |
 |---|---|---|
-| `$08` | dash (step $14 on the dash button) | verified |
-| `$04` | body armor: the knockback's vy is halved (and damage is halved, from the code) | verified (knockback) |
-| `$02` | arm: a third charge level (projectile 2); charging special weapons | verified (buster) |
-| `$01` | armored sprite set (`gfx` 24) (?) | |
+| `$1F99` | `upgrades` | low nibble armor: `$01` helmet (Storm Eagle's capsule), `$02` arm (Flame Mammoth's, or Zero), `$04` body (Sting Chameleon's), `$08` legs (Chill Penguin's); high nibble sub tanks collected: `$10` Storm Eagle, `$20` Armored Armadillo, `$40` Spark Mandrill, `$80` Flame Mammoth |
+| `$1F83` | `sub_tanks` | 4 slots `$1F83`-$1F86: bit 7 owned, energy = value − $80, full `$8E` (14 units) |
+| `$1F9C` | `hearts` | bit per stage: `$01` Chill Penguin, `$02` Armored Armadillo, `$04` Storm Eagle, `$08` Sting Chameleon, `$10` Flame Mammoth, `$20` Boomer Kuwanger, `$40` Spark Mandrill, `$80` Launch Octopus |
+| `$1F9A` | `max_hp` | $10 + 2 per heart, at most $20 |
+| `$1F86` | `weapon_flags` | weapon w (1-8 = the level of the boss who gives it) is the word `$1F85+2w`: low byte a fraction of a unit; high byte bits 0-5 ammo (max $1C = 28), bit 6 owned (boss beaten), bit 7 redraw the HUD bar (cleared when it's drawn). `$1F97/$1F98` is a 9th bar, drawn under ESCAPE.U on the pause screen, never selectable |
+| `$1F7E` | `hadouken` | bit 7 owned; low bits count spawns of Armored Armadillo's capsule, capped at 5 |
+| `$1F7C` | `fortress_open` | bit 6 = all 8 main bosses beaten |
+
+The item's sub-id (event data) is its bit: heart tanks are `$1628`-list object `$0B` (`$81:E992`), sub tanks object
+5 (`$81:E4BB`), life energy object 2 (`$82:E342`). The password (`password_decode` (`$80:F1E0`), not run) packs
+`upgrades`, `hearts`, the beaten bosses, the Hadouken and `intro_cleared` (`$1F9B`); it sets `max_hp` from the hearts.
+
+### What each armor part does
+
+| bit | part | effect |
+|---|---|---|
+| `$01` | helmet | jumping into a `$3C` block breaks it (`helmet_break_block` (`$81:9EA1`): tile + 1, sound $23) and X keeps rising; falling rocks (enemy $18, Sting Chameleon's cave) do no damage; X's sprite set `gfx` = $18 |
+| `$02` | arm | third buster charge level (projectile 2 + X-shot $1D); special weapons can charge at all (`$81:97DA`): charged id = weapon + 15 |
+| `$04` | body | damage ceil(d/2) (1→1, 2→1, 3→2, 5→3, 8→4; contact 6→3, 4→2); knockback vy halved |
+| `$08` | legs | dash on the dash button (step $14) or a double tap of forward, second press within 12 frames (`double_tap_dash` (`$81:9731`)); wall kicks break `$3C` walls (`legs_break_wall` (`$81:98FC`)) |
+
+The arm, body and legs are drawn by three $20-byte sprite objects after X's slot: `x_arm_part` (`$0C38`),
+`x_body_part` (`$0C58`), `x_legs_part` (`$0C78`), made by X's init (`$81:9D88`) from `upgrades`.
+
+### Dr. Light's capsules (enemy `$4D`, `$87:CA7B`)
+
+- Which part: `$86:D362[level]` → mask `$86:D3D5[index]` (01 02 04 08); the capsule deletes itself if X has it.
+  Position `$86:D33E[level]`; in Sting Chameleon's and Storm Eagle's stages it rises 96 px out of the floor first.
+- X touches it → step $1E, camera lock `$86:D3A1[level]`; Dr. Light (`$5C`) talks (text `$86:D4E3[level]`: Chameleon
+  $0D, Armadillo $19, Mammoth $0E, Eagle $0C, Penguin $0B; the box needs button presses); X jumps into the capsule.
+- Scene timer `$33`: 1, 20, 255 (the light `$4E` spawned at 20), 128 (the part's bit set by the light's animation
+  event: `TSB upgrades`, then the part's handler: helmet `gfx` = $18, arm/body/legs INC their sprite object), 30
+  (a second light that grants nothing), 30, then X's pose (step $38) for 60, then the demo: a pad script from
+  `$86:D36B` is played into the pad (Eagle: Left, jump; Mammoth: Right, a charged shot; Penguin: a double-tap dash;
+  Armadillo: the Hadouken motion; Chameleon: nothing), then control returns.
+- Sting Chameleon's capsule is not an event: event type 2 id $1D starts `$87:FB40` ($1D08 list); at X x $0630 the
+  camera locks, six rocks (id $11) fall 60 frames apart, enemy 9 appears; 96 frames after it dies the capsule rises;
+  after the grant, 180 frames, then six wall blocks at x $0610 break 20 frames apart.
+
+### Zero's buster
+
+Zero (`$66`, Sigma stage 1) after Vile: text $1C if X has the arm; otherwise text $1D and `TSB upgrades #$02`
+(`$88:D7D5`) plus `x_arm_part` — exactly the arm capsule's gift. There is no separate flag; the charge code only
+reads `upgrades` $02.
+
+### Hadouken
+
+- Armored Armadillo's capsule counts its spawns in `hadouken` (`$1F7E`) (dying and coming back counts, scrolling away
+  doesn't); it stays only at the 5th spawn or later with `upgrades` & `hearts` = $FF, `fortress_open` bit 6 and HP
+  exactly 32. Its light sets `hadouken` bit 7.
+- Input (`hadouken_input` (`$81:A062`)): Down alone, Down+forward, forward alone, then shoot pressed or released; each
+  within 20 frames (21 fails); exact pad matches. `hadouken_check` (`$81:A0EA`): HP exactly 32, bit 7, X standing,
+  walking or landing (steps 0/2/4/$0A; not in the air).
+- Step $42 (42 frames); projectile 4 at frame 17, X+25 px, 4 px a frame, sound $AF; 32 damage to every main boss
+  (a one-hit kill; blocked by Armored Armadillo's guard).
+
+### Weapons from bosses
+
+- Beating a main boss: `grant_boss_weapon` (`$84:A9EF`) sets $40 in that level's weapon word; at the next stage start
+  `refill_weapons` (`$80:9EF9`) fills every owned weapon to $DC00. The stage end after the 8th boss sets `fortress_open`
+  bit 6 (`$80:9C13`, `bosses_beaten_mask` (`$80:9FEB`) = $FF) and goes to Sigma stage 1.
+- `switch_weapon` (`$81:99D3`): R/L step through owned weapons only, wrapping buster ↔ Shotgun Ice; L+R = buster; not
+  while a shot is out. Shots on screen (`$86:BAB8`): buster 3, Torpedo 2, Sting 1, Shield 1, Fire Wave 6, Tornado 1,
+  Spark 3, Cutter 3, Ice 1.
+- Ammo per shot (`weapon_ammo_cost` (`$81:94AF`), units of $100 of 28): Torpedo 0.5 (charged 3), Sting 0.5 (4), Shield
+  1 (2), Fire Wave 1/16 a flame = 1 per second held (3), Tornado, Spark, Cutter 1 (2), Ice 1 (1.5); no ammo → no shot.
+- Weapon energy (`$1628` object 1): big 8 units, small 2, 1 unit every 4 frames into the current weapon, else the first
+  owned non-full one. Game quirk: `give_weapon_energy` (`$81:E11A`) never clears its overflow flag, so after an overflow
+  every later non-full weapon gets the remainder (8 units picked up gave 17 in the test).
+
+### Sub tanks, heart tanks, life energy
+
+- Sub tank: first slot without bit 7 → $80, its bit into `upgrades`; 80 frames frozen (sound $29). All 4 slots owned:
+  deleted without its bit.
+- Life energy: large +8 HP / small +2, 1 every 4 frames (objects frozen); the rest is lost. At full HP: +2 / +1 units
+  into the first owned non-full sub tank only (no spill; sound $2B when it fills).
+- Using a tank (pause menu: Start, Down, Y; not at full HP): every 4 frames HP +1 and the tank −1, always down to $80
+  even after HP is full; the emptied tank moves behind the non-empty ones (`subtank_compact` (`$80:CDA1`)). Game bug:
+  the "+2 HP a tick for a full tank" test reads slot X_hp − 10 instead of the chosen one (`subtank_menu_tick` (`$80:C723`)).
+- Heart tank: its bit into `hearts` first; if `max_hp` is already $20 nothing else. Otherwise 80 frames frozen, then 8
+  frames of palette flash with `max_hp` +1 and HP +1 every 4 frames, twice (HP isn't refilled; at $1F only one step).
 
 Copy protection touches X: init (`$81:81A3`) clears `upgrades` if a random byte of the ROM's two halves differs, an SRAM check
 (`$70:0800`, `$70:0804`) nudges `$1F9E`, and the jump/speed code checks its own bytes (`$81:8545`, `$81:853D`): a

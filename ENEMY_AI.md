@@ -175,12 +175,13 @@ unrelated enemy placed in Sting Chameleon's stage.
 
 ## Weapons, projectiles and damage
 
-- X's selected weapon is `$0BDB` (= weapon × 2). Ammo/ownership is a word at `$1F85 + weapon×2`.
-  Beating the boss of stage N gives weapon N (`$80:C947`, `$84:AAE6` read `$1F86 + 2×level`).
-- Firing (`$81:94AF`): X-Buster shots come from a charge-level table at `$86:BA76`. For special weapons,
-  **projectile id = weapon + 6** (uncharged) or **weapon + 15** (fully charged).
-- Hadouken is projectile 0x04, created by `$81:A114` only with the buster selected, **full health**,
-  the flag in `$1F7E` set and the input sequence done.
+- X's selected weapon is `$0BDB` (= weapon × 2). Ammo/ownership is a word at `$1F85 + weapon×2`
+  (`weapon_flags` high byte: ammo bits 0-5, owned bit 6; see PLAYER.md "Upgrades").
+  Beating the boss of stage N gives weapon N (`grant_boss_weapon` (`$84:A9EF`), verified; `$80:C947`, `$84:AAE6` read `$1F86 + 2×level`).
+- Firing (`weapon_ammo_cost` (`$81:94AF`)): X-Buster shots come from a charge-level table at `$86:BA76`. For special
+  weapons, **projectile id = weapon + 6** (uncharged) or **weapon + 15** (fully charged) (verified).
+- Hadouken is projectile 0x04, created by `hadouken_fire` (`$81:A114`) only with HP exactly 32,
+  `hadouken` (`$1F7E`) bit 7 set and the input sequence done (verified; 32 damage to every main boss).
 - Damage (`$84:9E15`): `damage = table[row = target's $28][column = projectile id]`. Rows are at
   `$86:EF37 + word[$86:EF37 + 2×row]`, 30 bytes each. Bit 7 set → special handler.
 

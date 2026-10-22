@@ -159,7 +159,7 @@ def main():
         print("playing to the start of the fight...", flush=True)
         fight_state(STATE, START["level"], START["x"], WALK_IN,
                     f"(function() local m = {M}; return m and r8(m + 1) == 4 end)()", y=START["y"])
-        print(f"running {len(runs)} emulator sessions, 4 at a time...", flush=True)
+        print(f"running {len(runs)} emulator sessions...", flush=True)
         out = dict(zip(runs, run_all(list(runs.values()))))
         json.dump(out, open(CACHE, "w"))
     t = {k: Fight(v, "lo") for k, v in out.items()}
