@@ -18,11 +18,15 @@ import sys
 from mmx1 import MMX1
 from trace import trace
 from lift import FIELDS, HELPERS, RAM_NAMES, TAKES_A
+from defs import ENEMY_SHOTS, KNOWN_OBJECT_NAMES
 
 ROM = "../Mega Man X (USA) (Rev 1).sfc"
 COND = {"BPL", "BMI", "BVC", "BVS", "BCC", "BCS", "BNE", "BEQ"}
 ALLOCATORS = {0x828321: "alloc_enemy", 0x82833E: "alloc_x_shot", 0x828358: "alloc_enemy_shot",
               0x8282B9: "alloc_misc", 0x8282D3: "alloc_effect"}
+# id -> name for what each allocator spawns, so `s->id = 33;` reads as the object it is
+SPAWN_NAMES = {0x828321: KNOWN_OBJECT_NAMES,
+               0x828358: {i: f"{n} {'' if m == 'verified' else '(?)'}".strip() for i, (n, _, m) in ENEMY_SHOTS.items()}}
 TAIL = {0x8280B4, 0x828398}       # common "finish frame" / "despawn" tails
 MASK_OPS = {"AND", "ORA", "EOR", "BIT", "TSB", "TRB"}
 
@@ -624,7 +628,13 @@ class Decompiler:
                 elif m:
                     emit(f"{dst} {m.group(1)}= {m.group(2)};")
                 else:
-                    emit(f"{dst} = {src};")
+                    spawned = None
+                    if dst == "s->id" and st.get("alloc") in SPAWN_NAMES:
+                        try:
+                            spawned = SPAWN_NAMES[st["alloc"]].get(int(str(src), 0))
+                        except ValueError:
+                            pass
+                    emit(f"{dst} = {src};" + (f"  // {spawned}" if spawned else ""))
                 r_ = None if mn == "STZ" else mn[2]
                 for r in ("A", "X", "Y"):
                     if r != r_ and dst in str(st[r]) and st[r] != r:
@@ -733,6 +743,7 @@ class Decompiler:
                     var = "s"
                     emit(f"Obj *{var} = {ALLOCATORS[t]}();")
                     st["X"] = var
+                    st["alloc"] = t
                     flags = ("alloc", var)
                     continue
                 name = HELPERS.get(t) or (self.fname.get(t) if t in self.func_starts else None) or f"sub_{t:06X}"

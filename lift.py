@@ -27,7 +27,7 @@ FIELDS = {
 }
 # anim_status bit 7 = the current animation has finished; hp bit 7 = ask the HUD to redraw the boss bar
 
-TAKES_A = {0x848F07, 0x8088A2, 0x8087A2, 0x84A338}
+TAKES_A = {0x848F07, 0x8088A2, 0x8087A2, 0x84A338, 0x84A316}
 
 HELPERS = {
     0x848F07: "anim_start",          # A = animation number
@@ -41,7 +41,7 @@ HELPERS = {
     0x82D7D7: "x_overlaps_self",     # (?) X alive and inside this object's box
     0x80E018: "bg_boss_load",        # (?) switch BG to the boss layer mode, start its tile load ($1F27)
     0x80E008: "bg_boss_ready",       # (?)
-    0x849C0E: "x_in_attack_box",     # (?) carry set if X overlaps the box at box_ptr (grabs, tongue)
+    0x849C0E: "obj_overlaps",        # carry set if the object at X (slot) overlaps this one's box_ptr box; X = $0BA8 tests X (grabs, tongue, oil) (seen in Mesen: Flame Mammoth's oil vs X and vs fireballs; probe.py on Mammoth with X = $0BA8: carry clear 127 px apart, set when touching)
     0x8490A0: "probe_terrain",       # collision value at (x + probe_x, y + probe_y); >= $34 is solid (verified)
     0x849B43: "hit_check",           # nonzero when a shot hit this object this frame (verified)
     0x849B03: "hurt_x_on_contact",   # damages X on touch (via $84:9D5C, not x_take_damage) (verified)
@@ -64,22 +64,23 @@ HELPERS = {
     0x82806E: "obj_far_offscreen",   # carry set when more than 64 px outside the screen
     0x82823E: "move_x",              # x += vx (x is 16.8 at $04-$06, vx 8.8)
     0x82825D: "move_y",              # y -= vy (y is 16.8 at $07-$09; positive vy = up)
+    0x8283A3: "obj_despawn_shot",    # like obj_despawn and also clears $2C-$2D; enemy shots use it (seen with probe.py: on an oil puddle)
     0x828398: "obj_despawn",         # (verified: a defeated boss disappears through it)
-    0x84A338: "screen_shake",        # (?)
+    0x84A338: "screen_shake",        # A = length -> $1E7A, strengths $1E83/$1E7F/$1E81/$1E85, $1E78 = 2 (seen with probe.py; Flame Mammoth's landing uses 75)
     0x84AADD: "boss_already_beaten",  # 1 if this stage's boss is beaten (weapon_flags bit 6; stages < 9 only)
     0x849FEB: "x_freeze_for_boss",   # X step = $1E: X is held still during a boss intro
     0x84A003: "x_unfreeze",          # X step = 0 (ends x_freeze_for_boss)
-    0x848000: "load_stage_tiles",    # (?) A = entry of this stage's animated-tile list ($84:B8AC), e.g. conveyor
+    0x848000: "load_stage_tiles",    # (seen in Mesen: Flame Mammoth's belt flip and death; probe.py: A = 3 writes his belt's tile entries at $7E:F062-F097 x-flipped, 2 and 4 unflipped) A = entry of this stage's animated-tile list ($84:B8AC), e.g. conveyor
     0x80B071: "load_object_set",     # A = this stage's enemy graphics set (see gfxsets.py)
     0x83F74A: "show_dialogue",       # (?) text box (effect 0x2A); dialogue_active bit 7 while it's up
     0x84A046: "x_step_3A",           # X step $3A (Sigma 4 cutscenes) (?)
     0x84A019: "x_step_34",           # X step $34 (Sigma 4 ending) (?)
     0x849F8A: "x_hold",              # X step $18, previous step saved in $0C12 (boss defeated, cutscenes)
     0x849FB2: "x_resume",            # X step = the one saved by x_hold
-    0x84A00D: "x_stun",              # (?) X step $36 for A frames ($0C2D)
-    0x84A316: "screen_quake",        # (?) A = length; $84A31F takes X/Y strength too
+    0x84A00D: "x_stun",              # X step $36 (step_stunned), X_stun_timer = A; X is stunned A + 32 frames (verified)
+    0x84A316: "screen_quake",        # A = length -> $1E79, strengths $1E82/$1E7E/$1E80/$1E84, $1E78 = 1 (seen with probe.py); $84A31F takes X/Y strength too
     0x84A09C: "angle_between",       # (?) from ($0000,$0002) to ($0004,$0006)
-    0x849F19: "x_grabbed",           # X step = $16: held by an enemy (Boomer Kuwanger's Dead Lift)
+    0x849F19: "x_grabbed",           # X step = $16: held by an enemy (Kuwanger's Dead Lift, Octopus's drain) (verified)
     0x849F7E: "x_drop",              # X step = 8: let go of a held X
     0x81812E: "x_update",
     0x8499AF: "x_wall_check",        # (?) carry set = wall in the facing direction (stops a walk)
@@ -115,6 +116,9 @@ RAM_NAMES.update({0x0BAD: "X_x", 0x0BB0: "X_y", 0x0BCF: "X_hp", 0x0BDB: "X_weapo
                   0x0C32: "X_untouchable",  # X+$8A = boss_defeated | hurt_lock | X+$89, every frame
                   0x0C12: "X_saved_step",   # x_hold keeps the step to go back to here
                   0x1E50: "screen_top",
+                  0x0BCA: "X_prev_x",       # X+$22: X's x before this frame's move (Flame Mammoth's oil averages with it) (verified)
+                  0x0C2F: "X_status_flags", # X+$87: bit 7 set while stunned (step $36); Spark Mandrill's quake won't stun again while it's set (seen in Mesen: one stun per quake)
+                  0x0C2D: "X_stun_timer",   # X+$85: set by x_stun, counted down in step $36 (verified)
                   0x1F99: "upgrades",       # (?) bit 2 halves damage taken (body armor?)
                   0x1F3F: "part1_status", 0x1F40: "part2_status", 0x1F41: "part3_status",  # fortress bosses' parts;
                   0x1F42: "boss_signal",    # bit 7 = destroyed; boss_signal: part -> boss handshakes (?)

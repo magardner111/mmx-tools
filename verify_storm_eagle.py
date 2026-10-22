@@ -2,25 +2,32 @@
 Re-checks everything we claim about Storm Eagle by running the game in Mesen (see mesen_verify.py).
 
     python3 verify_storm_eagle.py          # about 10 minutes on a Raspberry Pi 400 (runs 4 at a time)
+    python3 verify_storm_eagle.py --cached # re-check the last run's saved output
 
-Warping into his deck doesn't start the fight (he only comes after the platform ride), so every test loads
+Warping into his deck doesn't start the fight (he only comes after the platform ride), so the suite loads
 a save state made on the airship's wing tip (work/states/storm_eagle_wing.mss, checkpoint 1, x=6302),
-jumps left onto the platform and rides up. Once X is let go (step $46 ends) the no-damage AR code is on and
+jumps left onto the platform and rides up once, saving a second state at the first frame of the fight
+(work/states/storm_eagle_fight.mss); runs start from that, except those that check the ride, the intro or max HP.
+The weights are also checked exactly: hooks on his choice ($87:DE1F, $87:DE2C) set the row and the 0-31
+roll to every weight boundary. Once X is let go (step $46 ends) the no-damage AR code is on and
 X holds the middle of the deck and walks into the wind during a Gust (it pushes 2 px a frame, walking
 gives 1.5 and X has no dash at this point of the game, so an endless Gust would still win). Tests
 that need one attack set the weight table so he only picks it; tests of editable values change the value
 in the test ROM and check that the behaviour follows.
 """
 import collections
+import json
 import math
 import sys
 
 import params as P
 from defs import STORM_EAGLE as SE, DAMAGE_TABLE
 from mmx1 import MMX1, snes2pc
-from mesen_verify import Run, run_all
+from mesen_verify import Run, run_all, fight_state
 
 ID, STATE = 0x52, "work/states/storm_eagle_wing.mss"
+FIGHT = "work/states/storm_eagle_fight.mss"         # made from STATE by main(): first frame of the fight
+CACHE = "work/storm_eagle_runs.json"
 LO, HI = 6020, 6070            # X stays between these on the deck (pit at x < ~5760, edge at ~6300)
 # jump left off the wing onto the platform; nothing during the ride; then hold the middle of the deck
 RIDE = """
@@ -87,8 +94,41 @@ def values(**v):
     return lambda g: [P.put(g, PAR[k], x) for k, x in v.items()]
 
 
-def run(frames, inp=HOLD, seed=None, inf=True, ar=True, patch=None, extra=(), watch_all=True):
-    r = Run(level=5, x=6302, frames=frames, seed=seed, infinite_hp=inf, patch=patch, savestate=STATE)
+def pick_value(w, row, v):
+    """The attack (0-3) his choice gives for roll v (0-31) after attack `row`: from Birds down, v -= weight;
+    the first one that goes below 0; Gust if none."""
+    for y in (3, 2, 1):
+        v -= w[row][y]
+        if v < 0:
+            return y
+    return 0
+
+
+def boundary_cases(w):
+    """(row, roll) pairs at every weight boundary of every row, plus 0 and 31."""
+    out = []
+    for r in range(4):
+        c = [w[r][3], w[r][3] + w[r][2], w[r][3] + w[r][2] + w[r][1]]
+        out += [(r, v) for v in sorted({0, 31, *[b - 1 for b in c], *c}) if 0 <= v <= 31]
+    return out
+
+
+def force_weights(cases, start):
+    """Hooks: pick n sets his step to row*2 just before choose reads it and replaces `random & 31` with roll."""
+    lua = "{" + ", ".join(f"{{{r}, {v}}}" for r, v in cases) + "}"
+    return [(0x87DE1F, f'se_c = se_c or {lua}; se_n = (se_n or {start - 1}) + 1; local c = se_c[se_n % #se_c + 1]; '
+                       'se_v = c[2]; w8(s["cpu.d"] + 2, c[1] * 2); out("force", "row=" .. c[1] .. " v=" .. c[2])'),
+            (0x87DE2C, 'setreg("cpu.a", (s["cpu.a"] & 0xFF00) | se_v)')]
+
+
+def run(frames, inp=HOLD, seed=None, inf=True, ar=True, patch=None, extra=(), watch_all=True, hooks=(), full=False):
+    """full: from the wing tip through the ride and intro; otherwise from the first frame of the fight."""
+    r = Run(level=5, x=6302, frames=frames, seed=seed, infinite_hp=inf, patch=patch,
+            savestate=STATE if full else FIGHT)
+    if not full:
+        inp = "rode = true\n" + inp          # (already off the platform)
+    for a, lua in hooks:
+        r.at_exec(a, lua)
     r.track(ID, tag="eagle").track(0x24, "shot", tag="tornado").count_objects(0x55, "enemy", "eggs").count_objects(0x56, "enemy", "birds")
     for a, t in (FIELDS.items() if watch_all else []):
         r.on_exec(a, t)
@@ -138,7 +178,7 @@ class T:
 def main():
     seeds = [0x1111, 0x2345, 0x3C3C, 0x4A21, 0x5EED, 0x6F01, 0x7777, 0x8D13, 0x9101, 0xA0B1, 0xB2C3, 0xC4D5]
     runs = {
-        "natural": run(4500),
+        "natural": run(4500, full=True),
         "buster": run(4500, FIRE, seed=0x1111),
         "death": run(2600, FIRE, seed=0x3333, extra=[SET_HP1]),
         "x_dies": run(1500, TO_PIT, ar=False, inf=False),
@@ -148,12 +188,26 @@ def main():
         "dive2": run(4000, seed=0x4444, patch=only(1)),
         "tornado": run(2600, patch=only(2)),
         "birds": run(2600, patch=only(3)),
-        "v_hit": run(3000, FIRE, patch=values(max_hp=20, invuln_time=0x20)),
+        "v_hit": run(3000, FIRE, full=True, patch=values(max_hp=20, invuln_time=0x20)),
     }
-    for i, s in enumerate(seeds):
+    g0 = MMX1("work/hack.sfc")
+    b0 = snes2pc(TABLE)
+    w0 = [list(g0.rom[b0 + r * 4:b0 + r * 4 + 4]) for r in range(4)]
+    cases = boundary_cases(w0)
+    for i, s in enumerate(seeds[:6]):
         runs[f"stats{i}"] = run(6000, seed=s, watch_all=False).on_exec(0x87DE1F, "choose")
-    print(f"running {len(runs)} emulator sessions, 4 at a time...", flush=True)
-    out = dict(zip(runs, run_all(list(runs.values()))))
+    for i in range(5):                      # ~9 picks each (his attacks are long), starting 6 cases apart
+        runs[f"table{i}"] = run(8000, seed=seeds[6 + i], watch_all=False,
+                                hooks=force_weights(cases, i * len(cases) // 5)).on_exec(0x87DE1F, "choose")
+    if "--cached" in sys.argv:              # re-check the last run's output without emulating again
+        out = json.load(open(CACHE))
+    else:
+        print("riding up to the start of the fight...", flush=True)
+        fight_state(FIGHT, 5, 6302, HOLD, f"(function() local m = find(0x0E68, 0x1228, {ID}); "
+                                          "return m and r8(m + 1) == 4 end)()", frames=2500, savestate=STATE)
+        print(f"running {len(runs)} emulator sessions, 4 at a time...", flush=True)
+        out = dict(zip(runs, run_all(list(runs.values()))))
+        json.dump(out, open(CACHE, "w"))
     t = {k: T(v) for k, v in out.items()}
     alls = list(t.values())
     g = MMX1("work/hack.sfc")
@@ -323,8 +377,19 @@ def main():
     dof -= 4
     z = ((chi / dof) ** (1 / 3) - (1 - 2 / (9 * dof))) / math.sqrt(2 / (9 * dof)) if dof > 0 else 99
     total = sum(map(sum, obs))
-    check("attack choice matches the weights at $86:D41B (Gust gets the remainder)",
+    check("attack choice (unforced) matches the weights at $86:D41B (Gust gets the remainder)",
           abs(z) < 2.5 and not impossible and total > 60, f"{total} picks, chi2={chi:.1f}/{dof}, z={z:.2f}, {obs}")
+    done, ok = set(), []
+    for k in [f"table{i}" for i in range(5)]:
+        x = t[k]
+        for fo in [e for e in x.ev if e["tag"] == "force"]:
+            af = x.at.get(fo["f"] + 1)
+            if af and af["state"] == 4:
+                ok.append(af["step"] == 2 * pick_value(table, fo["row"], fo["v"]))
+                done.add((fo["row"], fo["v"]))
+    check("attack choice (forced): at every weight boundary of every row the roll gives the expected attack "
+          "(Birds, Tornado, Dive tested in that order, then Gust)", ok and all(ok) and done == set(cases),
+          f"{sum(ok)}/{len(ok)}, {len(done)}/{len(cases)} cases")
 
     # --- getting hit -------------------------------------------------------------------------------
     bu = t["buster"]

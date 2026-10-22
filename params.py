@@ -173,6 +173,16 @@ def set_weights(g: MMX1, t, row_label: str, weights: dict):
             raise ParamError("weights can't be negative")
     if sum(weights.values()) != t.total:
         raise ParamError(f"'{row_label}' totals {sum(weights.values())}, must be {t.total}")
+    # rows the boss can refuse picks from: he re-picks until he gets an attack he accepts, so a row must always
+    # hold one (e.g. Flame Mammoth refuses a 4th repeat, and Oil shot while 2 puddles are out)
+    others = {name for name, n in weights.items() if n and name not in t.needs_other_than}
+    need = 2 if t.rows.index(row_label) in t.single_attack_freezes else (1 if t.needs_other_than else 0)
+    if len(others) < need:
+        what = "two different attacks" if need == 2 else "one attack"
+        besides = f" besides {' / '.join(t.needs_other_than)}" if t.needs_other_than else ""
+        raise ParamError(f"'{row_label}' needs at least {what}{besides}: otherwise the boss can refuse every pick "
+                         f"(a 4th repeat, or {' / '.join(t.needs_other_than) or 'the only attack'} while it's not "
+                         f"allowed), re-picks forever and the game freezes")
     if t.fmt == "entries":
         if table_weights(g, t)[row_label] == {**{n: 0 for n in by_name}, **weights}:
             return  # same odds: keep the ROM's own byte order

@@ -206,7 +206,11 @@ In `mmx1.RAM`:
 - X position `$0BAD/$0BB0`
 - level `$1F7A`, checkpoint `$1F81`
 - object/tile/palette set `$1F08/09/0A`
-- boss-defeat flags for Chameleon `flag_sting_chameleon` (`$1F87`), Mandrill `flag_spark_mandrill` (`$1F8F`), Mammoth `flag_flame_mammoth` (`$1F95`)
+- alternate-stage flags (MegaEdX's names, `mmx1.RAM`): Chameleon's stage `flag_sting_chameleon` (`$1F87`), Mandrill's
+  `flag_spark_mandrill` (`$1F8F`), Mammoth's `flag_flame_mammoth` (`$1F95`). These are the low bytes of *other* bosses'
+  weapon words (Launch Octopus, Storm Eagle, Chill Penguin), i.e. the boss whose defeat changes that stage (?)
+- a boss's own beaten flag is bit 6 of `$1F86 + 2×stage` (below): verified for Flame Mammoth (`$1F8E` = `$40` the
+  frame his HP reaches 0) and Spark Mandrill (`$1F92`); about 300 frames later the word becomes `$DC00` (weapon owned, full)
 - decompressed layouts at `$7EE800` (FG) and `$7EEC00` (BG)
 - X's object is at `$0BA8`, so X's field `$33` = `$0BDB` is the selected weapon × 2; ammo/ownership at `$1F85 + weapon×2`
 - `last_hit_projectile` (`$1F1D`) = id of the last projectile that hit an enemy; `last_hit_object` (`$1F1E`) = that projectile's object address
@@ -261,3 +265,64 @@ Tests load a save state made on the wing tip, `work/states/storm_eagle_wing.mss`
 
 Mesen's Lua can only load a state from inside a memory callback (`emu.loadSavestate` does nothing from a
 frame event), and test scripts have no file access, so `Run` writes the state's bytes into the script.
+
+## Fight-start states, hooks and probes (mesen_verify.py, probe.py)
+
+- **Fight-start states.** Each suite plays to the first frame of the fight once (`fight_state()`, which uses
+  `Run.save_state`: `emu.createSavestate` inside a memory callback, bytes printed over stdout) and saves it as
+  `work/states/<boss>_fight.mss`; most runs start from it, which skips the warp, the door and the intro. A
+  state holds RAM, not ROM, so ROM patches still apply, except to values the intro already copied into RAM
+  (max HP, Flame Mammoth's trunk HP): runs that check those play the intro in full.
+- **Hooks** (`Run.at_exec(addr, lua)`): Lua run just before an instruction, with the CPU state `s` and
+  `setreg()`. Tests use them to replace `random`'s result at an attack pick, or to move X at the moment a boss
+  reads his position, so every table entry and every boundary is tried on purpose instead of by chance.
+- **Calling a routine** (`Run.call`, and `python3 probe.py ADDR` from the command line): at an instruction
+  where the context fits (e.g. a boss's update, so the direct page is his slot), push a return address and
+  jump to the routine; when it returns, the registers are restored and the game carries on. It logs whether it
+  returned, the registers and flags, and every RAM write during the call. Routines ending in `RTS` are entered
+  through an `RTL` byte in their own bank. Example: `x_stun(40)` wrote `X_step` (`$0BAA`), `$0BAB` and `X_stun_timer` (`$0C2D`), and X was
+  stunned 72 frames.
+- **Analysis cache.** Each suite saves its runs' output to `work/<boss>_runs.json`; `--cached` re-checks it
+  without emulating again.
+- **Busy frames.** On some frames the game skips object updates, so frame counts run long; suites check a
+  phase's length by its timer counting down (`countdown()`), not by counting frames.
+
+## Getting to Flame Mammoth in tests (verified by verify_flame_mammoth.py)
+
+Checkpoint 2 (x 7552) is between his two doors; walking right goes through the second door (x 7672). He waits
+until X is within 128 px; X can't move during the intro but the belt carries him (0.5 px a frame). The room is
+x 7690–8024 on the floor; at x 7700 X stands at the floor's left edge (y 703) and can't jump, so tests that
+pin X use 7760.
+
+## Getting to Spark Mandrill in tests (verified by verify_spark_mandrill.py)
+
+Checkpoint 2 (x 7296) is between his doors (x 7160 and 7416); walking right goes through the second one and X
+stops at x 7480. His room is screen x 7424–7680 with walls on both sides and a ceiling he hangs from; X can stand
+from x 7447. X pressed against a wall on the floor only sets the wall bits now and then; jumping at the wall and
+sliding down it keeps them set.
+
+## Getting to Armored Armadillo in tests (verified by verify_armored_armadillo.py)
+
+Checkpoint 2 (x 4992) is left of his door (x ≈ 5094); walking right goes through it and X drops into the room at
+x 5147. The room is x 5120–5376 (camera left 5120); he starts at x 5328 and his intro begins on its own, without
+waiting for X. Electric Spark for tests: `w16(0x1F91, 0xDC00); w8(0x0BDB, 12)`.
+
+## Getting to Launch Octopus in tests (verified by verify_launch_octopus.py)
+
+Checkpoint 2 is the flooded corridor between his doors (x 7160 and 7416, floor y 703) with the camera fixed at y 512.
+`testwarp` centres the camera on X, so tests start X at (7296, 640): the camera top is then 512 and X falls to the
+floor. Lower down, his spawn point (7616, 512) never comes into range and he doesn't appear. X walks right through
+the door into the room (x 7424–7680, floor y 687 for X); his intro starts by itself. Boomerang Cutter for tests:
+`w16(0x1F93, 0xDC00); w8(0x0BDB, 14)`; Rolling Shield: `w16(0x1F8B, 0xDC00); w8(0x0BDB, 6)`.
+
+## Getting to Boomer Kuwanger in tests (verified by verify_boomer_kuwanger.py)
+
+Checkpoint 2 is the short corridor at the top of the tower between his doors (x 1528 and 1784, floor y 111).
+Tests start X at (1664, 100) and walk right through the door; X stands at y 175 in the room (x 1792–2048, screen
+left 1792) and his intro starts by itself. Homing Torpedo for tests: `w16(0x1F87, 0xDC00); w8(0x0BDB, 2)`.
+
+## Getting to Sting Chameleon in tests (verified by verify_sting_chameleon.py)
+
+Checkpoint 2 is the corridor between his doors (x 7672 and 7928, floor y 431) with the camera fixed at y 256. Tests
+start X at (7808, 384), which gives that camera, and walk right through the door into the room (x 7936–8192, ceiling
+y 272, floor y 432); his intro starts by itself.

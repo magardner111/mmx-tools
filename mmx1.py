@@ -86,6 +86,8 @@ RAM = {
     "x_pos": 0x7E0BAD, "y_pos": 0x7E0BB0,
     "object_set": 0x7E1F08, "tile_set": 0x7E1F09, "palette_set": 0x7E1F0A,
     "level": 0x7E1F7A, "checkpoint": 0x7E1F81,
+    # alternate-stage flags (named after the stage they change): low bytes of the weapon words of Launch
+    # Octopus, Storm Eagle and Chill Penguin, whose defeat changes that stage (?). Not those bosses' beaten flags.
     "flag_sting_chameleon": 0x7E1F87, "flag_spark_mandrill": 0x7E1F8F,
     "flag_flame_mammoth": 0x7E1F95,
     "palette_ram": 0x7E0300,

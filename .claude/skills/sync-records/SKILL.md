@@ -19,6 +19,8 @@ finish with `python3 check_records.py` reporting **records consistent**.
 | X's fields / steps / routines | `defs.py` `PLAYER` | PLAYER.md (field table, step table with the same names, routines) |
 | what was confirmed in the game and how | VERIFIED.md (one table per boss, plus side findings) | the `check(...)` text in verify_*.py |
 | how to reach a boss / test setup | NOTES.md, the verify script's docstring | `work/states/*.mss` save states |
+| enemy-shot id (the `$1428` list) | `defs.py` `ENEMY_SHOTS` (name, update routine, marking; checked against the ROM's dispatch table `$80:F77D`) | boss `attacks_doc` ("enemy shot 0xNN"), ENEMY_AI.md, the C (`decomp.py` comments `s->id = …;`) |
+| enemy / object id | `defs.py` `KNOWN_OBJECT_NAMES` | ENEMY_AI.md, boss docs, the C (`decomp.py` comments `s->id = …;`) |
 
 `decomp.py` (C output) and `lift.py` (pseudo-C) read their names from these, so a name fixed in the primary place
 shows up in the C automatically. Re-run `python3 -c "from mmx1 import MMX1; from decomp import decompile; ..."`

@@ -21,9 +21,12 @@ TESTS = sorted(glob.glob("verify_*.py"))
 CODE = ["lift.py", "defs.py", "decomp.py", "mesen_verify.py", "testwarp.py"]
 OBJECTS = list(defs.BOSSES.values()) + [defs.PLAYER]          # everything with fields / func_names
 X_BASE = 0x0BA8
+STOCK_ROM = "Mega Man X (USA) (Rev 1).sfc"
 # reviewed: these objects really use a generic field's slot for something else
 FIELD_OVERRIDES = {("launch_octopus", 0x0C), ("bosspider", 0x1F)}
-RENAMED = {"X_f30": "X_hurt_lock", "anim_ptr": "box_ptr"}     # old -> new; add to this when renaming
+RENAMED = {"X_f30": "X_hurt_lock", "anim_ptr": "box_ptr", "quake_time": "stun_window", "x_in_attack_box": "obj_overlaps",
+           "armor_stun": "armor_invuln", "hop_jump": "whirlpool_jump",
+           "cloak_move": "cloak_fade"}     # old -> new; add to this when renaming
 
 CHECKS = []
 problems = []
@@ -167,6 +170,27 @@ def player_step_table():
             problem("name clash", f"PLAYER.md step row {m.group(1)} says '{m.group(2)}', defs.PLAYER says '{want}'")
         if not want:
             problem("missing symbol", f"PLAYER.md step handler {m.group(1)} has no name in defs.PLAYER.func_names")
+
+
+@check
+def enemy_shots():
+    """defs.ENEMY_SHOTS matches the ROM's enemy-shot dispatch table, and every "enemy shot 0xNN" in a boss's
+    attacks_doc is listed (and, if the shot's name names a boss, it's that boss's)."""
+    from mmx1 import MMX1, snes2pc
+    g = MMX1(STOCK_ROM)
+    base = snes2pc(defs.ENEMY_SHOT_DISPATCH)
+    for i, (name, routine, _) in defs.ENEMY_SHOTS.items():
+        stub = snes2pc(0x800000 | g.w(base + 2 * i))
+        if g.rom[stub] != 0x22 or g.l(stub + 1) != routine:
+            problem("enemy shot", f"shot 0x{i:02X} ({name}): ROM dispatches to {snes(g.l(stub + 1))}, defs says {snes(routine)}")
+    for b in defs.BOSSES.values():
+        for attack, text in b.attacks_doc.items():
+            for m in re.findall(r"enemy shots? (0x[0-9A-F]{2})", text):
+                i = int(m, 16)
+                if i not in defs.ENEMY_SHOTS:
+                    problem("enemy shot", f"{b.name} '{attack}' mentions enemy shot {m}, not in defs.ENEMY_SHOTS")
+                elif "'s " in defs.ENEMY_SHOTS[i][0] and not defs.ENEMY_SHOTS[i][0].startswith(b.name.split(" (")[0]):
+                    problem("enemy shot", f"{b.name} '{attack}' uses enemy shot {m}, listed as {defs.ENEMY_SHOTS[i][0]}")
 
 
 @check

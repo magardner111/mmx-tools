@@ -38,8 +38,10 @@ the checkpoint's `telDwn` frames, so the test ROM releases it higher, over open 
 instead of sinking into it. Some bosses only appear after their approach (Storm Eagle comes after a platform
 ride); tests reach those from a save state instead (see NOTES.md).
 
-**Checking claims in the game**: `verify_chill_penguin.py` and `verify_storm_eagle.py` run the game headless in
-Mesen 2 (`mesen_verify.py`) and check every claim we make about that boss; results are in `VERIFIED.md`.
+**Checking claims in the game**: `verify_chill_penguin.py`, `verify_storm_eagle.py`, `verify_flame_mammoth.py`,
+`verify_spark_mandrill.py`, `verify_armored_armadillo.py`, `verify_launch_octopus.py`, `verify_boomer_kuwanger.py` and `verify_sting_chameleon.py` run the game headless in Mesen 2 (`mesen_verify.py`) and check every claim we make about that boss; results are
+in `VERIFIED.md` (`--cached` re-checks the last run's output). `python3 probe.py ADDR` calls any routine in the
+running game and reports what it did (see NOTES.md).
 
 **Text size** (toolbar, or Ctrl/⌘ `+` / `-`) scales all text, from 70% to 150%, and is remembered. Panels that
 don't fit the window scroll.
@@ -72,6 +74,9 @@ python3 trace.py 81B516
 | `disasm.py`, `trace.py` | 65816 disassembler / control-flow tracer |
 | `decomp.py` | Structured decompiler: functions per state, if/else, named fields (`python3 decomp.py chill_penguin`) |
 | `lift.py` | Literal assembly → pseudo-C, one statement per instruction; also the shared name tables |
+| `mesen_verify.py`, `verify_*.py` | Headless Mesen runs: tracking, hooks, save states, routine calls; one suite per boss |
+| `probe.py` | Calls a routine in the running game and reports registers and RAM writes |
+| `check_records.py` | Checks names and facts agree across the code, docs and tests |
 | `enemies.py` | Enemy dispatch table and HP finder |
 | `sprites.py` | Draws an enemy's sprite (first frame) from the ROM |
 | `collision_survey.py` | Builds the collision contact sheet |
@@ -91,11 +96,11 @@ python3 trace.py 81B516
 
 - Code values are only written if the expected opcode sits right before them (`prev` in `defs.py`),
   so a different ROM version or a moved routine is refused rather than corrupted.
-- Values are range-checked; attack-odds rows must total 16.
+- Values are range-checked; attack-odds rows must total 16 (or 32 for weights), and rows that would freeze the game
+  (Flame Mammoth re-picking forever) are refused.
 - Edits to the in-place values (everything in Bosses/Enemies) work on both stock and expanded ROMs.
 
 ## Not done yet
 
-- Nothing has been play-tested in an emulator.
-- Only Chill Penguin is defined as a boss; the other bosses need tracing the same way.
+- Chill Penguin, Storm Eagle, Flame Mammoth, Spark Mandrill, Armored Armadillo, Launch Octopus, Boomer Kuwanger and Sting Chameleon (all eight) are checked in the game; the fortress bosses are traced from the code only.
 - Level editing (moving enemies etc.) exists in `mmx1.py` but isn't in the UI yet.

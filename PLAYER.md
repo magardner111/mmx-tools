@@ -12,12 +12,15 @@ Names marked (?) come from reading the code only; the rest were seen in Mesen (s
 | `$02` | `$0BAA` | step | what X is doing (table at `$81:82A6`, below) |
 | `$05` | `$0BAD` | x | |
 | `$08` | `$0BB0` | y | |
+| `$22` | `$0BCA` | prev_x | X's x before this frame's move (verified: Flame Mammoth's oil puddle sets X's x to the average of this and the new x) |
 | `$0E` | `$0BB6` | visible | toggled every frame by the flash timer, so X blinks |
 | `$26` | `$0BCE` | pending_damage | taken off HP by `x_take_damage` / the contact path |
 | `$27` | `$0BCF` | hp | bit 7 = redraw the HUD bar |
 | `$2B` | `$0BD3` | touch | terrain contact bits |
 | `$30` | `$0BD8` | **hurt_lock** | nonzero = can't be hurt. Raised by a hit (INC at `$84:9D2E`, `$84:9F32`), set to 8 by `x_grabbed`, 1 by a dying boss, cleared by `x_drop` and when the flash timer runs out (`$81:828A`) |
 | `$6B` | `$0C13` | flash_timer | post-hit blinking; at 0, X is visible again and hurt_lock is cleared |
+| `$85` | `$0C2D` | stun_timer | set by `x_stun`, counted down in step `$36` (verified) |
+| `$87` | `$0C2F` | status_flags | bit 7 set while stunned (step `$36` sets and clears it); Spark Mandrill's punch quake doesn't stun X again while it's set (seen in Mesen: one stun per 30-frame quake) |
 | `$89` | `$0C31` | (?) | a second "can't be hurt" source, ORed into `$8A` |
 | `$8A` | `$0C32` | **untouchable** | rebuilt every frame by X's update (`$81:8142`): `boss_defeated \| hurt_lock \| $89`. `hurt_x_on_contact` skips X while it's nonzero |
 
@@ -45,13 +48,14 @@ after X is through the door.
 | `$0C` | `$81:8A4F` | `step_dying` | dying: HP 0 or fell into a pit (seen in Mesen); enemies stop updating meanwhile (seen in Mesen: Storm Eagle's timer froze) |
 | `$0E` | `$81:865B` | `step_hurt` | hurt / knockback: sets hurt_lock = 8, flash_timer = 60 (seen in Mesen) |
 | `$12` | `$81:883E` | `step_wall_slide` | sliding down a wall (seen in Mesen: down the side of the pit in Storm Eagle's stage) |
-| `$16` | `$81:8B3B` | `step_grabbed` | held by an enemy (`x_grabbed`) (?) |
+| `$16` | `$81:8B3B` | `step_grabbed` | held by an enemy (`x_grabbed`); verified in Launch Octopus's drain: the boss sets X's x, y + 32 each frame, then X's update leaves him at y + 31 |
 | `$18` | `$81:8B4D` | `step_hold` | held still (`x_hold`, previous step kept in `X_saved_step` (`$0C12`)) (?) |
 | `$1C` | `$81:8B4E` | `step_boss_door` | walking through a boss door, then `$1E` (seen in Mesen: Chill Penguin's door) |
 | `$1E` | `$81:8B57` | `step_boss_freeze` | frozen for a boss intro (`x_freeze_for_boss`) (seen in Mesen) |
 | `$22` | `$81:89FA` | `step_beam_in` | beaming in (verified, see below; init sets it, or `$44` if `$1F7F` ≠ 0) |
 | `$46` | `$81:8B57` | `step_boss_freeze` | held during Storm Eagle's platform ride and intro, let go the frame he starts fighting (seen in Mesen) |
-| `$34`, `$36`, `$3A` | | | Sigma 4 ending, stun (`x_stun`), Sigma 4 cutscenes (?) |
+| `$36` | `$81:9249` | `step_stunned` | stunned (`x_stun`): a stagger animation, then `stun_timer` counts down; lasts `stun_timer` + 32 frames (verified with Flame Mammoth's landing: 30 → 62, 14 → 46; and `x_stun(40)` called directly → 72) |
+| `$34`, `$3A` | | | Sigma 4 ending, Sigma 4 cutscenes (?) |
 
 `python3 decomp.py x` prints X's whole update as C with these names (symbols: `PLAYER` in `defs.py`).
 The hurt step itself (`$0E`) sets hurt_lock = 8 and flash_timer = 60, so the AR value 8 is the same value
@@ -69,7 +73,7 @@ a normal hit uses.
 | `$84:9F7E` | `x_drop` | step 8, hurt_lock = 0 |
 | `$84:9F8A` / `$84:9FB2` | `x_hold` / `x_resume` | |
 | `$84:9FEB` / `$84:A003` | `x_freeze_for_boss` / `x_unfreeze` | |
-| `$84:A00D` | `x_stun` | step `$36` for A frames (`$0C2D`) (?) |
+| `$84:A00D` | `x_stun` | step `$36`, `stun_timer` (`$0C2D`) = A: X is stunned A + 32 frames (verified) |
 
 ## Beaming in (step `$22`) — verified
 

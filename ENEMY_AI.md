@@ -206,13 +206,13 @@ Every editable value below is defined in `defs.py` and checked against the stock
 
 | boss | object | code | damage class | weakness (damage table) | weapon with a special reaction | how attacks are picked |
 |---|---|---|---|---|---|---|
-| Launch Octopus | enemy 07 | `$81:C433` | 0C | Rolling Shield | Boomerang Cutter ×3 cuts tentacles | X distance band (+ tentacles cut), 32 entries/row at `$86:C625`; **row order close, far, mid** |
-| Sting Chameleon | enemy 0A | `$88:853E` | 06 | Boomerang Cutter | Boomerang Cutter → knockback | inline random rolls after each attack; while cloaked he hops up to 3 times and lashes if X is in tongue reach |
-| Armored Armadillo | enemy 14 | `$83:B144` | 0B | Electric Spark | Electric Spark breaks armour; charged buster into guard → counter | X distance band, 16/row at `$86:C980`; max 2 repeats |
-| Flame Mammoth | enemy 0C | `$87:91A7` | 08 | Storm Tornado | Boomerang Cutter ×3 cuts trunk | X high → stomp; else distance band (+ trunk cut), 16/row at `$86:C843`; max 3 repeats |
+| Launch Octopus (verified) | enemy 07 | `$81:C433` | 0C (0 while spinning) | Rolling Shield | Boomerang Cutter ×3 cuts tentacles (then torpedo attacks only); other hits: one-animation flinch, then resumes | Torpedo hop first; X distance band (+ tentacles cut), 32 entries/row at `$86:C625`; **row order close, far, mid** |
+| Sting Chameleon (verified) | enemy 0A | `$88:853E` | 06 | Boomerang Cutter | Boomerang Cutter → knockback; can't be hit while cloaked | inline random rolls after each attack (leap first); while cloaked he hops up to 3 times and lashes if X is in tongue reach; high leap bug: vy $740, gravity unchanged |
+| Armored Armadillo (verified) | enemy 14 | `$83:B144` | 0B (0 while guarding or curled with armour) | Electric Spark | Electric Spark breaks armour (then no guard, hurtable curled); charged buster into guard → 8-shot counter | Rolling first; X distance band, 16/row at `$86:C980`; never 3 in a row (the other attack is forced, so a one-attack row doesn't freeze) |
+| Flame Mammoth (verified) | enemy 0C, trunk enemy 0E | `$87:91A7` | 08 | Storm Tornado | Boomerang Cutter ×3 knocks the trunk off | X high → stomp; else distance band (+ trunk cut), 16/row at `$86:C843`; max 3 repeats while the trunk is on (a one-attack row freezes the game) |
 | Storm Eagle | enemy 52 (appears during the platform ride; type-2 trigger 20 (?)) | `$87:D85C` | 07 | Chameleon Sting | — | per-attack weights /32 at `$86:D41B` (Gust, Dive, Storm Tornado, Birds) |
-| Spark Mandrill | enemy 31 | `$88:9BE1` | 0A | Shotgun Ice | Shotgun Ice freezes (other hits never interrupt him); charged buster staggers dash | per-attack weights /32 at `$86:CFDB` (Electric Spark, Ceiling drop, Dash punch, Jump at X) |
-| Boomer Kuwanger | enemy 05 | `$87:8A7E` | 0D | Homing Torpedo | while teleporting, hittable only with Homing Torpedo selected; Homing Torpedo hits flinch longer (24 vs 16 frames) | after a dash: 16/row at `$86:C5A3` (row = dash ≥ 9 frames); after a teleport: 16/row at `$86:C5C3` (row = X within 128 px); Dead Lift whenever X is within 32 px in front |
+| Spark Mandrill (verified) | enemy 31 | `$88:9BE1` | 0A | Shotgun Ice | Shotgun Ice freezes (other hits never interrupt him); charged buster staggers dash | random first attack; then per-attack weights /32 at `$86:CFDB` (Electric Spark, Ceiling drop, Dash punch, Jump at X), 6 rows: after each attack, after a stagger, after a freeze |
+| Boomer Kuwanger (verified) | enemy 05 | `$87:8A7E` | 0D | Homing Torpedo | while teleporting, hittable only with Homing Torpedo selected (or on the frame he reappears); Homing Torpedo hits flinch longer (24 vs 16 frames) | after a dash: 16/row at `$86:C5A3` (row = dash ≥ 9 frames); after a teleport: 16/row at `$86:C5C3` (row = X within 128 px); Dead Lift whenever X is within 32 px in front |
 | Chill Penguin | enemy 02 | `$81:B516` | 09 | Fire Wave | Fire Wave → big flinch | previous attack, 16/row at `$86:C45B` |
 
 Common to all eight: the HP bar fills to 32 in the intro (`CMP #$20`), there are 60 frames of
@@ -264,7 +264,7 @@ per attack. The one ordering difference is the end of the intro (Boomer waits 30
 |---|---|---|---|
 | `alloc_enemy` (`$82:8321`) | `$0E68–$1228` | `$80:F8DD` | enemies (event type 3), Storm Eagle, Octopus piranhas |
 | `alloc_x_shot` (`$82:833E`) | `$1228–$1428` | `$80:F68F` | X's projectiles (30 ids) |
-| `alloc_enemy_shot` (`$82:8358`) | `$1428–$1628` | ? | enemy projectiles (ice shots, oil, fireballs…) |
+| `alloc_enemy_shot` (`$82:8358`) | `$1428–$1628` | `$80:F77D` (each entry a `JSL` stub; ids in `defs.ENEMY_SHOTS`) | enemy projectiles (ice shots, oil, fireballs…) |
 | `alloc_misc_1628` (`$82:82B9`) | `$1628–` | ? | misc (Chill Penguin's hook) |
 | `alloc_effect_1928` (`$82:82D3`) | `$1928–` | ? | effects |
 Event type 2 (triggers) dispatch through `$80:F59A` (35 ids).
