@@ -37,8 +37,12 @@ def speeds():
     return {st: (s16(g.w(b + st * 3)), s16(g.w(b + st * 3 + 2)), g.rom[b + st * 3 + 4]) for st in range(0, 0x48, 2)}
 
 
-def run(frames, inp, extra=(), seed=0x1234):
+def run(frames, inp, extra=(), seed=0x1234, call_damage=None):
     r = Run(level=3, x=4992, frames=frames, seed=seed, infinite_hp=False, savestate=STATE)
+    if call_damage:                    # (frame, X HP, damage): x_take_damage called from X's update, D = X's slot
+        f, hp, dmg = call_damage
+        r.call(0x81812E, 0x849F2F, when=f"frame == {f}", d=0x0BA8, db=0x86,
+               pre=f"w8(0x0BCF, 0x80 | {hp}); w8(0x0BCE, {dmg})", tag="dmg")
     r.input(inp)
     r.each_frame(NO_BOSS)
     r.each_frame(X_TRACK)
@@ -112,7 +116,13 @@ return {right = frame >= 20, b = (st == 0 and frame >= 150 and frame % 30 < 5) o
         "dash_jump": run(200, "return {a = frame >= 20 and frame < 80, b = frame >= 30 and frame < 80}",
                          extra=["w8(0x1F99, r8(0x1F99) | 0x08)"]),
         "shots": run(300, "return {y = frame >= 20 and frame % 8 < 2}"),
-        **{f"charge{n}": run(260, hold_y(n)) for n in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120)},
+        **{f"charge{n}": run(260, hold_y(n)) for n in (10, 30, 31, 32, 40, 70, 100, 101, 102, 110, 150)},
+        "charge_arm": run(300, hold_y(190), extra=["w8(0x1F99, r8(0x1F99) | 0x02)"]),
+        "charge_arm178": run(300, hold_y(178), extra=["w8(0x1F99, r8(0x1F99) | 0x02)"]),
+        # lift X 100 px into the air at frame 20: a long fall
+        "fall": run(200, "return {}", extra=["if frame == 20 then w16(0x0BB0, r16(0x0BB0) - 100) end"]),
+        "take_damage": run(200, "return {}", call_damage=(30, 10, 3)),
+        "death": run(300, "return {}", call_damage=(30, 1, 3)),
         "hurt": run(200, "return {}", extra=["if frame == 30 then w8(0x0BCE, 2); w8(0x0BAA, 0x0E); w8(0x0BAB, 0) end"]),
         "hurt_armor": run(200, "return {}", extra=["w8(0x1F99, r8(0x1F99) | 0x04)",
                                                    "if frame == 30 then w8(0x0BCE, 2); w8(0x0BAA, 0x0E); w8(0x0BAB, 0) end"]),
@@ -166,7 +176,7 @@ return {right = frame >= 20, b = (st == 0 and frame >= 150 and frame % 30 < 5) o
           j.starts(8) and j.starts(10) and 50 <= base - top <= 62, f"height {base - top}")
     land = j.starts(10)
     lp = j.phase(land[0]) if land else []
-    check("landing: step $0A for 4 frames, then step 0", lp and len(lp) in (3, 4) and j.at.get(lp[-1]["f"] + 1, {}).get("step") == 0,
+    check("landing: step $0A (step_timer 4: 3 frames after the first), then step 0", lp and len(lp) in (3, 4) and j.at.get(lp[-1]["f"] + 1, {}).get("step") == 0,
           f"{len(lp)} frames")
     sj = t["jump_short"]
     rel = [e for a, e in zip(sj.x, sj.x[1:]) if a["step"] == 6 and e["step"] == 8]
@@ -198,6 +208,10 @@ return {right = frame >= 20, b = (st == 0 and frame >= 150 and frame % 30 < 5) o
     check(f"dash (step $14, needs upgrades bit 3 = $08): vx ${sp[0x14][0]:X} for 32 frames (t52 counts down)",
           ds and dp and abs(dp[1]["vx"] if len(dp) > 1 else 0) == sp[0x14][0] and len(dp) in range(30, 36)
           and not t["no_dash"].starts(0x14), f"{len(dp)} frames, vx {dp and dp[min(1, len(dp) - 1)]['vx']}")
+    de_ = d.starts(0x20)
+    dep = d.phase(de_[0]) if de_ else []
+    check("dash end (step $20): when dash_timer runs out, 8 frames (step_timer 8), then step 0",
+          de_ and len(dep) in (8, 9) and d.at.get(dep[-1]["f"] + 1, {}).get("step") == 0, f"{len(dep)} frames")
     dj = t["dash_jump"]
     djs = dj.starts(6)
     check("dash jump: jumping out of a dash keeps the dash speed in the air (spd $375)",
@@ -214,12 +228,17 @@ return {right = frame >= 20, b = (st == 0 and frame >= 150 and frame % 30 < 5) o
     check("buster: each press fires a shot (X shot list $1228, id 0), at most 3 on screen", ls and all(l[0]["id"] == 0
           for l in ls) and max(alive.values()) <= 3, f"{len(ls)} shots, speeds {dict(vx)}, max on screen {max(alive.values()) if alive else 0}")
     ch = {}
-    for n in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120):
+    for n in (10, 30, 31, 32, 40, 70, 100, 101, 102, 110, 150):
         x = t[f"charge{n}"]
-        l = x.lives()
-        ch[n] = sorted({k[0]["id"] for k in l})
-    check("charging: holding the shoot button and letting go fires a bigger shot after long enough (ids by hold time)",
-          ch[10] == [0] and any(v != [0] for v in ch.values()), f"{ch}")
+        ch[n] = sorted({k[0]["id"] for k in x.lives()} - {0})       # (the press itself fires a normal shot, id 0)
+    want = {n: ([] if n <= 30 else [1] if n <= 100 else [3]) for n in ch}
+    check("charge: pressing sets $57 = 180, held it counts down; at 150 (held 31 frames) level 1 -> projectile 1 on "
+          "release, at 80 (held 101 frames) level 2 -> projectile 3 ($86:BA71: 2, 8 -> shot request $59)",
+          ch == want, f"{ch}")
+    arm = sorted({k[0]["id"] for k in t["charge_arm"].lives()} - {0})
+    arm178 = sorted({k[0]["id"] for k in t["charge_arm178"].lives()} - {0})
+    check("charge with the arm upgrade (upgrades bit $02): a third level at $57 = 1 (held 180 frames) -> projectile 2, "
+          "plus a second X-shot object $1D", arm == [2, 0x1D] and arm178 == [3], f"held 190: {arm}, held 178: {arm178}")
 
     # --- hurt ---------------------------------------------------------------------------------
     h = t["hurt"]
@@ -242,6 +261,22 @@ return {right = frame >= 20, b = (st == 0 and frame >= 150 and frame % 30 < 5) o
     a1 = hap[1] if len(hap) > 1 else {}
     check("armor (upgrades bit 2 = $04) halves the knockback's vy", a1 and first and abs(a1.get("vy", 0) - first.get("vy", 0) // 2) <= 64,
           f"vy {first.get('vy') if first else None} -> {a1.get('vy')}")
+
+    # --- falling, damage, death ----------------------------------------------------------------
+    f = t["fall"]
+    vys = [e["vy"] for e in f.x if e["step"] == 8]
+    check("falling: vy drops 64 a frame; the fall step clamps it to −$580 ($5F) before gravity, so at full speed every "
+          "frame ends at −$5C0 (5.75 px a frame)", vys and min(vys) == -0x5C0 and vys.count(-0x5C0) > 2,
+          f"min vy {min(vys) if vys else None}, {vys.count(-0x5C0)} frames at the cap")
+    td = t["take_damage"]
+    hps = [e["hp"] & 0x7F for e in td.x]
+    ts = td.starts(0x0E)
+    check("x_take_damage: X HP −= pending damage (10 - 3 = 7), hurt step $0E", ts and 7 in hps,
+          f"HP {sorted(set(hps))}, steps {sorted({e['step'] for e in td.x})}")
+    de = t["death"]
+    dd = de.starts(0x0C)
+    check("x_take_damage at 1 HP: HP 0 and the dying step $0C", dd and any(e["hp"] & 0x7F == 0 for e in de.x),
+          f"steps {sorted({e['step'] for e in de.x})}")
 
     report(results)
 

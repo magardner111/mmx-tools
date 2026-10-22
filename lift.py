@@ -119,7 +119,7 @@ RAM_NAMES.update({0x0BAD: "X_x", 0x0BB0: "X_y", 0x0BCF: "X_hp", 0x0BDB: "X_weapo
                   0x0BCA: "X_prev_x",       # X+$22: X's x before this frame's move (Flame Mammoth's oil averages with it) (verified)
                   0x0C2F: "X_status_flags", # X+$87: bit 7 set while stunned (step $36); Spark Mandrill's quake won't stun again while it's set (seen in Mesen: one stun per quake)
                   0x0C2D: "X_stun_timer",   # X+$85: set by x_stun, counted down in step $36 (verified)
-                  0x1F99: "upgrades",       # (?) bit 2 halves damage taken (body armor?)
+                  0x1F99: "upgrades",       # bit $08 dash, $04 armor (halves knockback), $02 arm charge level 3 (verified); $01 (?)
                   0x1F3F: "part1_status", 0x1F40: "part2_status", 0x1F41: "part3_status",  # fortress bosses' parts;
                   0x1F42: "boss_signal",    # bit 7 = destroyed; boss_signal: part -> boss handshakes (?)
                   0x1F23: "boss_cleared",   # set when a boss is finished (also by boss_already_beaten)

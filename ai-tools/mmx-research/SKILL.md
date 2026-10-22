@@ -60,6 +60,7 @@ two suites in parallel slow Mesen enough that long runs hit the timeout (`frames
 | `verify_<boss>.py`, `verify_player.py` | one suite per subject; `--cached` re-checks the last run (`work/<name>_runs.json`) |
 | `probe.py` | call any routine in the running game and report what it wrote |
 | `check_records.py` | consistency checker over all records, docs and suites |
+| `rooms.py`, `verify_rooms.py` | boss room data (`work/rooms/<boss>.json`, `.png`), checked against the game |
 | `VERIFIED.md` | every confirmed claim with its evidence; `NOTES.md` routes and findings; `ENEMY_AI.md`, `PLAYER.md` |
 
 ## The Mesen runner (`mesen_verify.py`)
@@ -131,8 +132,13 @@ two suites in parallel slow Mesen enough that long runs hit the timeout (`frames
 - **X in progress** (`verify_player.py`): walking ($178, step 2 for 5 frames), jump (vy $553, gravity 64; releasing
   resets vy), landing ($0A), wall slide (8 frames stuck, then −$200), wall jump ($178 away for 8 frames), dash
   (upgrades bit $08, $375 for 32 frames), dash jump, buster (≤ 3 shots, $440), charge (≥ 40 frames → projectile 1,
-  ≥ ~110 → projectile 3), hurt (vx −$8A, vy $200, armor bit $04 halves vy, flash 60) — 18/18 passing; records for X
-  not yet synced. Per-step speeds: table `$86:B9B1` (vx word, vy word, gravity byte per step × 3).
+  ≥ ~110 → projectile 3), hurt (vx −$8A, vy $200, armor bit $04 halves vy, flash 60), fall cap (−$5C0 at full speed), damage and death —
+  23/23, records synced (PLAYER.md). Charge exact: 31 frames → projectile 1, 101 → 3, 180 with the arm → 2 (+ $1D). Per-step speeds: table `$86:B9B1` (vx word, vy word, gravity byte per step × 3).
+
+- **Boss rooms** (`rooms.py`, `verify_rooms.py`, 24/24): camera, borders, X/boss start, collision grid and a picture
+  per room in `work/rooms/`; ROM collision = the game's in 7 rooms; Storm Eagle's deck is rewritten at runtime (game
+  grid and screenshot used). Room mechanics still to do (Octopus's water, Penguin's ice, Eagle's deck edge; Mammoth's
+  belt is verified in his suite).
 
 ## Roadmap (agreed order)
 

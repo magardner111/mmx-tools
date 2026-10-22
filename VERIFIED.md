@@ -290,3 +290,53 @@ Side findings:
   wait before he moves.
 - The floor tongue has its own lash limit (`CMP #$03` at `$88:8C67`); the editor's Tongue lashes now writes both.
 - The high-leap bug above is in the original game.
+
+
+## X: movement, shots, damage — confirmed (`verify_player.py`, 23/23 on 2026-10-21)
+
+Test room: Armored Armadillo's room from his fight-start state, with his object cleared every frame (a flat floor
+between two walls). X's fields are logged every frame; inputs are scripted (some react to X's step, e.g. jump four
+frames into a wall slide).
+
+| claim | evidence |
+|---|---|
+| walk: `step_walk_start` (vx $100) for 5 frames, then `step_walk` at `move_speed` $178 (1.47 px a frame, steps of 1 and 2); facing from Left/Right (`x_face_dpad`) | 1.468 px/frame |
+| jump: vy $553, gravity 64 (−64 a frame), about 56 px high; letting go ends it: step 8 with vy reset; `step_land` (sound, `step_timer` 4) | height 54; short hop 23 |
+| fall: vy clamped to −$580 (`fall_cap`) before gravity → −$5C0 (5.75 px a frame) at full speed | 7 frames at −$5C0 |
+| wall slide: vy 0 for 8 frames (`wall_stick`), then −$200; wall jump: 4 frames, then vx $178 away for 8, then a jump (held) or a fall | 34-frame slide; 13-frame wall jump |
+| dash: needs `upgrades` bit $08 (no dash without it); vx $375 for 32 frames (`dash_timer`), then `step_dash_end` for 8 frames; a jump out of it keeps $375 (`dash_jump`) | 32 + 8 frames |
+| buster: shot id 0 in X's shot list at $440, at most 3 on screen | 18 shots |
+| charge: `charge_timer` 180 counted down while held; held 31 frames → projectile 1, 101 frames → projectile 3; with `upgrades` bit $02, 180 frames → projectile 2 plus X-shot object $1D (`$86:BA71` → `shot_request`) | boundaries 30/31 and 100/101 exact |
+| hurt: hurt_lock 8, vx −$8A, vy $200, gravity 64; flash_timer 60 after the animation, hurt_lock cleared when it runs out; armor (bit $04) halves the vy | 448 → 192 on the first frame |
+| `x_take_damage`: HP −= pending damage (10 → 7), step $0E; at 1 HP → HP 0 and step $0C | called with `Run.call` from X's update |
+
+Side findings:
+- Projectile ids: 1 = half charge, 3 = full charge, 2 = the arm upgrade's charge (the labels had 2 and 3 swapped).
+- Setting a boss's beaten flag before his room makes entering it end the stage (X: step $1E → $1A → $18, then gone);
+  to get an empty room, clear his object every frame.
+
+## Boss rooms — confirmed (`verify_rooms.py`, 24/24 on 2026-10-21)
+
+Each boss's fight-start state is loaded in Mesen; on its 20th frame the suite reads the camera (`screen_left` `$1E4D`,
+`screen_top` `$1E50`), the camera borders (`border_left` `$1E5E`, `border_right` `$1E60`, `border_top` `$1E68`,
+`border_bottom` `$1E6E`), X's and the boss's positions, and every 16×16 collision cell of the
+screen through the game's own lookup (scene grid `$7E:E800`, map `$7E:2000`, table at `collision_table_ptr`).
+`rooms.py` writes the result per room to `work/rooms/<boss>.json` (with the collision grid) and `<boss>.png`.
+
+| room | camera (left, top) | camera borders | X | boss |
+|---|---|---|---|---|
+| Chill Penguin | 7680, 287 | x 7680–7680, y 256–287 | 7705, 431 | 7888, 428 |
+| Storm Eagle | 5920, 47 | x 5632–6144, y 47–47 | 6047, 207 | 6192, 196 |
+| Flame Mammoth | 7763, 543 | x 7680–7792, y 512–543 | 7891, 687 | 8012, 671 |
+| Spark Mandrill | 7424, 768 | x 7424–7424, y 767–768 | 7451, 943 | 7632, 930 |
+| Armored Armadillo | 5120, 2560 | x 5120–5120, y 2559–2560 | 5147, 2719 | 5328, 2678 |
+| Launch Octopus | 7424, 512 | x 7424–7424, y 512–512 | 7451, 687 | 7607, 642 |
+| Boomer Kuwanger | 1792, 0 | x 1792–1792, y 0–0 | 1819, 175 | 1980, 168 |
+| Sting Chameleon | 7936, 256 | x 7936–7936, y 256–256 | 7963, 415 | 8067, 347 |
+
+- In 7 rooms the ROM's collision (`testwarp.collision_at`) equals the game's lookup cell for cell (1,671 cells).
+- **Storm Eagle's deck is not the ROM's layout**: on the first fight frame the level map in RAM has a flat deck at
+  y 224 where the ROM's layout has a sloped one (38 of 240 cells differ), so his room's collision and picture are taken
+  from the game.
+- Flame Mammoth's camera can still scroll in the fight (x 7680–7792), and Chill Penguin's and Spark Mandrill's by a
+  pixel or so vertically; the others are locked.

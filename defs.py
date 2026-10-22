@@ -48,9 +48,9 @@ WEAPONS = [  # index: (game name, boss that gives it)
 # Projectile id (what the damage routine stores in $1F1D) -> name. "(?)" = not confirmed.
 PROJECTILES = {
     0x00: "X-Buster",
-    0x01: "X-Buster half charge (?)",
-    0x02: "X-Buster full charge",
-    0x03: "X-Buster charge, arm upgrade (?)",
+    0x01: "X-Buster half charge",
+    0x02: "X-Buster charge, arm upgrade",
+    0x03: "X-Buster full charge",
     0x04: "Hadouken",
     0x05: "X-Buster variant (?)",
     0x06: "X-Buster variant (?)",
@@ -752,7 +752,9 @@ PLAYER = SimpleNamespace(
     fields={0x0E: "visible", 0x26: "pending_damage", 0x30: "hurt_lock", 0x6B: "flash_timer",
             0x36: "buttons", 0x37: "dpad", 0x38: "buttons_prev", 0x3A: "buttons_new", 0x5E: "touch_any",
             0x69: "facing", 0x22: "prev_x", 0x85: "stun_timer", 0x87: "status_flags",
-            0x89: "untouchable_2", 0x8A: "untouchable"},
+            0x89: "untouchable_2", 0x8A: "untouchable",
+            0x4E: "step_timer", 0x52: "dash_timer", 0x55: "dash_jump", 0x57: "charge_timer", 0x58: "charge_state",
+            0x59: "shot_request", 0x5B: "charge_level", 0x5C: "move_speed", 0x5F: "fall_cap", 0x77: "wall_stick"},
     state_names=["init", "alive"],
     attack_handlers=[],
     func_names={0x8181A3: "init", 0x81825D: "alive",
@@ -760,7 +762,12 @@ PLAYER = SimpleNamespace(
                 0x818486: "step_jump", 0x818522: "step_fall", 0x81883E: "step_wall_slide",
                 0x818A4F: "step_dying", 0x81865B: "step_hurt", 0x818B3B: "step_grabbed",
                 0x818B4D: "step_hold", 0x818B57: "step_boss_freeze", 0x8189FA: "step_beam_in",
-                0x818B4E: "step_boss_door", 0x819249: "step_stunned"},   # step $46 also runs step_boss_freeze (Storm Eagle's ride)
+                0x818B4E: "step_boss_door", 0x819249: "step_stunned",
+                0x818600: "step_land", 0x818718: "step_wall_jump", 0x81890E: "step_dash", 0x8189AA: "step_dash_end",
+                0x8195EC: "x_start_jump", 0x819934: "x_step_speeds", 0x819662: "x_start_fall",
+                0x8195D6: "x_to_normal", 0x819580: "x_face_dpad",
+                0x81984A: "charge_idle", 0x819859: "charge_start", 0x81988A: "charge_hold"},
+    # step $46 also runs step_boss_freeze (Storm Eagle's ride)
 )
 
 # Enemy shots (the $1428 list, alloc_enemy_shot $82:8358): id -> (name, update routine, marking).

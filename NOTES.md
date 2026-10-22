@@ -326,3 +326,9 @@ left 1792) and his intro starts by itself. Homing Torpedo for tests: `w16(0x1F87
 Checkpoint 2 is the corridor between his doors (x 7672 and 7928, floor y 431) with the camera fixed at y 256. Tests
 start X at (7808, 384), which gives that camera, and walk right through the door into the room (x 7936–8192, ceiling
 y 272, floor y 432); his intro starts by itself.
+
+## An empty boss room for testing X (verify_player.py)
+
+Setting a boss's beaten flag (`$1F86 + 2×stage` bit 6) before X reaches his room makes entering the room end the stage
+(seen in Mesen: X goes step $1E → $1A → $18 and disappears; the level-load also rewrites the flag early, so it has to
+be held). Instead, start from the boss's fight-start state and clear his object slot every frame.

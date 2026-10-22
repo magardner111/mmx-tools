@@ -39,7 +39,7 @@ instead of sinking into it. Some bosses only appear after their approach (Storm 
 ride); tests reach those from a save state instead (see NOTES.md).
 
 **Checking claims in the game**: `verify_chill_penguin.py`, `verify_storm_eagle.py`, `verify_flame_mammoth.py`,
-`verify_spark_mandrill.py`, `verify_armored_armadillo.py`, `verify_launch_octopus.py`, `verify_boomer_kuwanger.py` and `verify_sting_chameleon.py` run the game headless in Mesen 2 (`mesen_verify.py`) and check every claim we make about that boss; results are
+`verify_spark_mandrill.py`, `verify_armored_armadillo.py`, `verify_launch_octopus.py`, `verify_boomer_kuwanger.py`, `verify_sting_chameleon.py`, `verify_player.py` (X) and `verify_rooms.py` (the eight boss rooms) run the game headless in Mesen 2 (`mesen_verify.py`) and check every claim we make about that boss; results are
 in `VERIFIED.md` (`--cached` re-checks the last run's output). `python3 probe.py ADDR` calls any routine in the
 running game and reports what it did (see NOTES.md).
 

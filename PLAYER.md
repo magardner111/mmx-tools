@@ -22,6 +22,16 @@ Names marked (?) come from reading the code only; the rest were seen in Mesen (s
 | `$85` | `$0C2D` | stun_timer | set by `x_stun`, counted down in step `$36` (verified) |
 | `$87` | `$0C2F` | status_flags | bit 7 set while stunned (step `$36` sets and clears it); Spark Mandrill's punch quake doesn't stun X again while it's set (seen in Mesen: one stun per 30-frame quake) |
 | `$89` | `$0C31` | (?) | a second "can't be hurt" source, ORed into `$8A` |
+| `$4E` | `$0BF6` | step_timer | per-step frame count: walk start 5, landing 4, wall-jump pose 4 then push 8 (verified) |
+| `$52` | `$0BFA` | dash_timer | 32 at the start of a dash, counted down (verified) |
+| `$55` | `$0BFD` | dash_jump | set during a dash: a jump out of it keeps `move_speed` $375 (verified) |
+| `$57` | `$0BFF` | charge_timer | 180 when the shoot button is pressed, counted down while held (verified) |
+| `$58` | `$0C00` | charge_state | 0 idle, 2 held, 4 charged |
+| `$59` | `$0C01` | shot_request | shot to fire, from `$86:BA71`[`charge_level`]: 2 half, 8 full, 4 arm level |
+| `$5B` | `$0C03` | charge_level | 3 after 31 frames, 2 after 101, 1 after 180 with the arm upgrade (verified) |
+| `$5C` | `$0C04` | move_speed | horizontal speed: $178 walking/jumping, $375 dashing (verified) |
+| `$5F` | `$0C07` | fall_cap | −$580, set by init; the fall step clamps vy to it before gravity (verified: −$5C0 at full speed) |
+| `$77` | `$0C1F` | wall_stick | 8 when a wall slide starts: vy held at 0 meanwhile (verified) |
 | `$8A` | `$0C32` | **untouchable** | rebuilt every frame by X's update (`$81:8142`): `boss_defeated \| hurt_lock \| $89`. `hurt_x_on_contact` skips X while it's nonzero |
 
 ## The Action Replay code `7E0BD808` (no damage, walk through enemies)
@@ -43,11 +53,15 @@ after X is through the door.
 | `$00` | `$81:82EE` | `step_normal` | standing, under control; walks when Left/Right is held (seen in Mesen; `x_unfreeze` sets it) |
 | `$02` | `$81:839D` | `step_walk_start` | starting to walk: 5 frames, then step 4 (seen in Mesen) |
 | `$04` | `$81:8408` | `step_walk` | walking at 1.5 px a frame (steps of 1 and 2) (verified) |
-| `$06` | `$81:8486` | `step_jump` | jump (?): sound, rises under gravity, brakes vx |
-| `$08` | `$81:8522` | `step_fall` | falling (seen in Mesen); `x_drop` sets it |
+| `$06` | `$81:8486` | `step_jump` | jump: vy $553, gravity 64, sound; letting go of jump ends it (step 8, vy reset to 0); about 56 px high (verified) |
+| `$08` | `$81:8522` | `step_fall` | falling: vy clamped to `fall_cap` (−$580) before gravity, so −$5C0 (5.75 px) a frame at full speed (verified); `x_drop` sets it |
+| `$0A` | `$81:8600` | `step_land` | landing: sound, `step_timer` 4, then step 0 (verified) |
 | `$0C` | `$81:8A4F` | `step_dying` | dying: HP 0 or fell into a pit (seen in Mesen); enemies stop updating meanwhile (seen in Mesen: Storm Eagle's timer froze) |
-| `$0E` | `$81:865B` | `step_hurt` | hurt / knockback: sets hurt_lock = 8, flash_timer = 60 (seen in Mesen) |
-| `$12` | `$81:883E` | `step_wall_slide` | sliding down a wall (seen in Mesen: down the side of the pit in Storm Eagle's stage) |
+| `$0E` | `$81:865B` | `step_hurt` | hurt / knockback: hurt_lock = 8, vx −$8A (backwards), vy $200 (halved with the armor, `upgrades` bit $04), gravity 64; flash_timer = 60 when the animation ends, then step 0 (verified) |
+| `$10` | `$81:8718` | `step_wall_jump` | jump on a wall: 4 frames, then vx $178 away from the wall for 8 frames, then step 6 if jump is held, else a fall (verified) |
+| `$12` | `$81:883E` | `step_wall_slide` | in the air pressing into a wall: vy 0 for 8 frames (`wall_stick`), then −$200 (2 px a frame down) (verified) |
+| `$14` | `$81:890E` | `step_dash` | dash (needs `upgrades` bit $08): vx $375 for 32 frames (`dash_timer`) (verified) |
+| `$20` | `$81:89AA` | `step_dash_end` | after a dash: 8 frames (`step_timer`), then step 0; jump or Left/Right cut it short (verified: 8 frames) |
 | `$16` | `$81:8B3B` | `step_grabbed` | held by an enemy (`x_grabbed`); verified in Launch Octopus's drain: the boss sets X's x, y + 32 each frame, then X's update leaves him at y + 31 |
 | `$18` | `$81:8B4D` | `step_hold` | held still (`x_hold`, previous step kept in `X_saved_step` (`$0C12`)) (?) |
 | `$1C` | `$81:8B4E` | `step_boss_door` | walking through a boss door, then `$1E` (seen in Mesen: Chill Penguin's door) |
@@ -73,6 +87,10 @@ a normal hit uses.
 | `$84:9F7E` | `x_drop` | step 8, hurt_lock = 0 |
 | `$84:9F8A` / `$84:9FB2` | `x_hold` / `x_resume` | |
 | `$84:9FEB` / `$84:A003` | `x_freeze_for_boss` / `x_unfreeze` | |
+| `$81:95EC` | `x_start_jump` | step 6 with the jump speeds; keeps the dash speed if `dash_jump` is set (verified) |
+| `$81:9934` | `x_step_speeds` | vx (by facing), vy, gravity for the current step from the table at `$86:B9B1` (step × 3: vx word, vy word, gravity byte) (verified for steps 2, 4, 6, $0E, $10, $12, $14) |
+| `$81:9662` / `$81:95D6` | `x_start_fall` / `x_to_normal` | step 8 / step 0 |
+| `$81:984A` / `$81:9859` / `$81:988A` | `charge_idle` / `charge_start` / `charge_hold` | the charge state machine (`charge_state` 0/2/4); on release `shot_request` = `$86:BA71`[`charge_level`] (verified) |
 | `$84:A00D` | `x_stun` | step `$36`, `stun_timer` (`$0C2D`) = A: X is stunned A + 32 frames (verified) |
 
 ## Beaming in (step `$22`) — verified
@@ -100,7 +118,7 @@ y offset −1, half height $11).
 | `$0BDE`/`$0BE0`/`$0BE2` (X+`$36/$38/$3A`) | buttons / last frame / new (?) | the other buttons, remapped through the button setup at `$7E:FFC4` |
 
 Step 0 starts a walk (step 2) when Left/Right is held and `x_wall_check` (`$84:99AF`) (wall check in the facing direction,
-carry = blocked) (?) allows it; facing is `$69` = $40 for right, 0 for left (`$81:9580`).
+carry = blocked) (?) allows it; facing is `$69` = $40 for right, 0 for left, set from Left/Right by `x_face_dpad` (`$81:9580`).
 
 ## Terrain lookup — verified
 
@@ -115,3 +133,25 @@ X walks 1.5 px a frame. Without the leg upgrade he can't dash (the test save has
 `upgrades` (`$1F99`) did not give him one, so where the legs are recorded is still unknown), so a push of
 2 px a frame (Storm Eagle's Gust) beats walking; walking into it he still loses 0.5 px a frame. Pushes are
 written straight into his position, `X_x` (`$0BAD`, with its fraction at `$0BAC`), not his speed.
+
+## Shots and charging — verified (verify_player.py)
+
+- Each press of the shoot button fires a buster shot (X's shot list `$1228`, id 0) at $440 (4.25 px a frame); at most
+  3 are on screen at once.
+- Holding the button: `charge_timer` 180, counting down. Held 31 frames (timer 150): charged, sound, palette flash;
+  letting go fires projectile 1 (half charge). Held 101 frames (timer 80): projectile 3 (full charge). With the arm
+  upgrade (`upgrades` bit $02), held 180 frames (timer 1): projectile 2 plus a second X-shot object, id $1D.
+  The X-shot object id is the projectile id the damage tables use (`last_hit_projectile` was 3 for full charges).
+
+## Upgrades (`upgrades`, `$1F99`)
+
+| bit | effect | |
+|---|---|---|
+| `$08` | dash (step $14 on the dash button) | verified |
+| `$04` | body armor: the knockback's vy is halved (and damage is halved, from the code) | verified (knockback) |
+| `$02` | arm: a third charge level (projectile 2); charging special weapons | verified (buster) |
+| `$01` | armored sprite set (`gfx` 24) (?) | |
+
+Copy protection touches X: init (`$81:81A3`) clears `upgrades` if a random byte of the ROM's two halves differs, an SRAM check
+(`$70:0800`, `$70:0804`) nudges `$1F9E`, and the jump/speed code checks its own bytes (`$81:8545`, `$81:853D`): a
+mismatch sets `$1F9E` bit 7, which the jump step then uses as X's gravity.
